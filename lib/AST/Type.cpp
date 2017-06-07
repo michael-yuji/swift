@@ -948,17 +948,7 @@ static void addMinimumProtocols(Type T,
 /// \brief Compare two protocols to establish an ordering between them.
 int ProtocolType::compareProtocols(ProtocolDecl * const* PP1,
                                    ProtocolDecl * const* PP2) {
-  auto *P1 = *PP1;
-  auto *P2 = *PP2;
-  ModuleDecl *M1 = P1->getParentModule();
-  ModuleDecl *M2 = P2->getParentModule();
-
-  // Try ordering based on module name, first.
-  if (int result = M1->getName().str().compare(M2->getName().str()))
-    return result;
-
-  // Order based on protocol name.
-  return P1->getName().str().compare(P2->getName().str());
+  return TypeDecl::compare(*PP1, *PP2);
 }
 
 bool ProtocolType::visitAllProtocols(
@@ -3916,24 +3906,25 @@ case TypeKind::Id:
 
   case TypeKind::ProtocolComposition: {
     auto pc = cast<ProtocolCompositionType>(base);
-    SmallVector<Type, 4> members;
+    SmallVector<Type, 4> substMembers;
+    auto members = pc->getMembers();
     bool anyChanged = false;
     unsigned index = 0;
-    for (auto member : pc->getMembers()) {
+    for (auto member : members) {
       auto substMember = member.transformRec(fn);
       if (!substMember)
         return Type();
       
       if (anyChanged) {
-        members.push_back(substMember);
+        substMembers.push_back(substMember);
         ++index;
         continue;
       }
       
       if (substMember.getPointer() != member.getPointer()) {
         anyChanged = true;
-        members.append(members.begin(), members.begin() + index);
-        members.push_back(substMember);
+        substMembers.append(members.begin(), members.begin() + index);
+        substMembers.push_back(substMember);
       }
       
       ++index;
@@ -3942,7 +3933,8 @@ case TypeKind::Id:
     if (!anyChanged)
       return *this;
     
-    return ProtocolCompositionType::get(Ptr->getASTContext(), members,
+    return ProtocolCompositionType::get(Ptr->getASTContext(),
+                                        substMembers,
                                         pc->hasExplicitAnyObject());
   }
   }
@@ -4145,4 +4137,17 @@ getRecursivePropertiesFromSubstitutions(SubstitutionList Params) {
     props |= param.getReplacement()->getRecursiveProperties();
   }
   return props;
+}
+
+Type TypeBase::openAnyExistentialType(ArchetypeType *&opened) {
+  assert(isAnyExistentialType());
+  if (auto metaty = getAs<ExistentialMetatypeType>()) {
+    opened = ArchetypeType::getOpened(metaty->getInstanceType());
+    if (metaty->hasRepresentation())
+      return MetatypeType::get(opened, metaty->getRepresentation());
+    else
+      return MetatypeType::get(opened);
+  }
+  opened = ArchetypeType::getOpened(this);
+  return opened;
 }

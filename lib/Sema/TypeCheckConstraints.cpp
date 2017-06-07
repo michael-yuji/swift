@@ -272,7 +272,7 @@ static void diagnoseBinOpSplit(UnresolvedDeclRefExpr *UDRE,
 
   unsigned splitLoc = splitCandidate.first;
   bool isBinOpFirst = splitCandidate.second;
-  StringRef nameStr = UDRE->getName().getBaseName().str();
+  StringRef nameStr = UDRE->getName().getBaseIdentifier().str();
   auto startStr = nameStr.substr(0, splitLoc);
   auto endStr = nameStr.drop_front(splitLoc);
 
@@ -300,7 +300,7 @@ static void diagnoseBinOpSplit(UnresolvedDeclRefExpr *UDRE,
 static bool diagnoseOperatorJuxtaposition(UnresolvedDeclRefExpr *UDRE,
                                     DeclContext *DC,
                                     TypeChecker &TC) {
-  Identifier name = UDRE->getName().getBaseName();
+  Identifier name = UDRE->getName().getBaseIdentifier();
   StringRef nameStr = name.str();
   if (!name.isOperator() || nameStr.size() < 2)
     return false;
@@ -455,7 +455,8 @@ resolveDeclRefExpr(UnresolvedDeclRefExpr *UDRE, DeclContext *DC) {
     diagnose(Loc, diag::use_unresolved_identifier, Name, Name.isOperator())
       .highlight(UDRE->getSourceRange());
 
-    const char *buffer = Name.getBaseName().get();
+    Identifier simpleName = Name.getBaseIdentifier();
+    const char *buffer = simpleName.get();
     llvm::SmallString<64> expectedIdentifier;
     bool isConfused = false;
     uint32_t codepoint;
@@ -464,7 +465,7 @@ resolveDeclRefExpr(UnresolvedDeclRefExpr *UDRE, DeclContext *DC) {
                                                         buffer +
                                                         strlen(buffer)))
            != ~0U) {
-      int length = (buffer - Name.getBaseName().get()) - offset;
+      int length = (buffer - simpleName.get()) - offset;
       char expectedCodepoint;
       if ((expectedCodepoint =
            confusable::tryConvertConfusableCharacterToASCII(codepoint))) {
@@ -479,10 +480,9 @@ resolveDeclRefExpr(UnresolvedDeclRefExpr *UDRE, DeclContext *DC) {
 
     if (isConfused) {
       diagnose(Loc, diag::confusable_character,
-               UDRE->getName().isOperator(),
-               Name.getBaseName().str(), expectedIdentifier)
-        .fixItReplaceChars(Loc, Loc.getAdvancedLoc(Name.getBaseName().getLength()),
-                           expectedIdentifier);
+               UDRE->getName().isOperator(), simpleName.str(),
+               expectedIdentifier)
+        .fixItReplace(Loc, expectedIdentifier);
     } else {
       // Note all the correction candidates.
       for (auto &result : Lookup) {
@@ -646,7 +646,7 @@ TypeChecker::getSelfForInitDelegationInConstructor(DeclContext *DC,
     if (nestedArg->isSuperExpr())
       return ctorContext->getImplicitSelfDecl();
     if (auto declRef = dyn_cast<DeclRefExpr>(nestedArg))
-      if (declRef->getDecl()->getName() == Context.Id_self)
+      if (declRef->getDecl()->getFullName() == Context.Id_self)
         return ctorContext->getImplicitSelfDecl();
   }
   return nullptr;
@@ -1372,13 +1372,13 @@ TypeExpr *PreCheckExpression::simplifyTypeExpr(Expr *E) {
     auto fn = binaryExpr->getFn();
     if (auto Overload = dyn_cast<OverloadedDeclRefExpr>(fn)) {
       for (auto Decl : Overload->getDecls())
-        if (Decl->getName().str() == "&") {
+        if (Decl->getBaseName() == "&") {
           isComposition = true;
           break;
         }
     } else if (auto *Decl = dyn_cast<UnresolvedDeclRefExpr>(fn)) {
       if (Decl->getName().isSimpleName() &&
-            Decl->getName().getBaseName().str() == "&")
+          Decl->getName().getBaseName() == "&")
         isComposition = true;
     }
 
@@ -1951,7 +1951,8 @@ getTypeOfExpressionWithoutApplying(Expr *&expr, DeclContext *dc,
 
   // Get the expression's simplified type.
   auto &solution = viable[0];
-  Type exprType = solution.simplifyType(expr->getType());
+  auto &solutionCS = solution.getConstraintSystem();
+  Type exprType = solution.simplifyType(solutionCS.getType(expr));
 
   assert(exprType && !exprType->hasTypeVariable() &&
          "free type variable with FreeTypeVariableBinding::GenericParameters?");
@@ -2037,7 +2038,9 @@ bool TypeChecker::typeCheckCompletionSequence(Expr *&expr, DeclContext *DC) {
 
   // Add type variable for the code-completion expression.
   auto tvRHS =
-      CS.createTypeVariable(CS.getConstraintLocator(CCE), TVO_CanBindToLValue);
+      CS.createTypeVariable(CS.getConstraintLocator(CCE),
+                            TVO_CanBindToLValue |
+                            TVO_CanBindToInOut);
   CCE->setType(tvRHS);
 
   if (auto generated = CS.generateConstraints(expr)) {
@@ -2056,7 +2059,7 @@ bool TypeChecker::typeCheckCompletionSequence(Expr *&expr, DeclContext *DC) {
 
   // Attempt to solve the constraint system.
   SmallVector<Solution, 4> viable;
-  if (CS.solve(viable, FreeTypeVariableBinding::GenericParameters))
+  if (CS.solve(viable, FreeTypeVariableBinding::UnresolvedType))
     return true;
 
   auto &solution = viable[0];
@@ -2066,8 +2069,16 @@ bool TypeChecker::typeCheckCompletionSequence(Expr *&expr, DeclContext *DC) {
     solution.dump(log);
   }
 
-  expr->setType(solution.simplifyType(expr->getType()));
-  CCE->setType(solution.simplifyType(CCE->getType()));
+  auto &solutionCS = solution.getConstraintSystem();
+  expr->setType(solution.simplifyType(solutionCS.getType(expr)));
+  auto completionType = solution.simplifyType(solutionCS.getType(CCE));
+
+  // If completion expression is unresolved it doesn't provide
+  // any meaningful information so shouldn't be in the results.
+  if (completionType->is<UnresolvedType>())
+    return true;
+
+  CCE->setType(completionType);
   return false;
 }
 
@@ -2179,7 +2190,7 @@ bool TypeChecker::typeCheckBinding(Pattern *&pattern, Expr *&initializer,
         return nullptr;
       }
 
-      assert(expr->getType()->isEqual(InitType));
+      assert(solution.getConstraintSystem().getType(expr)->isEqual(InitType));
 
       initializer = expr;
       return expr;
@@ -2333,7 +2344,7 @@ bool TypeChecker::typeCheckForEachBinding(DeclContext *dc, ForEachStmt *stmt) {
       }
 
       SequenceType =
-        cs.createTypeVariable(Locator, /*options=*/TVO_MustBeMaterializable);
+        cs.createTypeVariable(Locator, /*options=*/0);
       cs.addConstraint(ConstraintKind::Conversion, cs.getType(expr),
                        SequenceType, Locator);
       cs.addConstraint(ConstraintKind::ConformsTo, SequenceType,
@@ -2406,8 +2417,7 @@ bool TypeChecker::typeCheckForEachBinding(DeclContext *dc, ForEachStmt *stmt) {
       }
 
       if (elementType.isNull()) {
-        elementType = cs.createTypeVariable(elementLocator,
-                                            TVO_MustBeMaterializable);
+        elementType = cs.createTypeVariable(elementLocator, /*options=*/0);
       }
 
       // Add a conversion constraint between the element type of the sequence
@@ -2492,7 +2502,7 @@ Type ConstraintSystem::computeAssignDestType(Expr *dest, SourceLoc equalLoc) {
     // Newly allocated type should be explicitly materializable,
     // it's invalid to use non-materializable types as assignment destination.
     auto objectTv = createTypeVariable(getConstraintLocator(dest),
-                                       TVO_MustBeMaterializable);
+                                       /*options=*/0);
     auto refTv = LValueType::get(objectTv);
     addConstraint(ConstraintKind::Bind, typeVar, refTv,
                   getConstraintLocator(dest));
@@ -2712,7 +2722,8 @@ static Type replaceArchetypesWithTypeVariables(ConstraintSystem &cs,
           return Type();
 
         auto locator = cs.getConstraintLocator(nullptr);
-        auto replacement = cs.createTypeVariable(locator, 0);
+        auto replacement = cs.createTypeVariable(locator,
+                                                 TVO_CanBindToInOut);
 
         if (auto superclass = archetypeType->getSuperclass()) {
           cs.addConstraint(ConstraintKind::Subtype, replacement,
@@ -2729,7 +2740,8 @@ static Type replaceArchetypesWithTypeVariables(ConstraintSystem &cs,
       // FIXME: Remove this case
       assert(cast<GenericTypeParamType>(origType));
       auto locator = cs.getConstraintLocator(nullptr);
-      auto replacement = cs.createTypeVariable(locator, 0);
+      auto replacement = cs.createTypeVariable(locator,
+                                               TVO_CanBindToInOut);
       types[origType] = replacement;
       return replacement;
     },
@@ -2995,9 +3007,9 @@ void Solution::dump(raw_ostream &out) const {
       out << " as ";
       if (choice.getBaseType())
         out << choice.getBaseType()->getString() << ".";
-        
-      out << choice.getDecl()->getName().str() << ": "
-        << ovl.second.openedType->getString() << "\n";
+
+      out << choice.getDecl()->getBaseName() << ": "
+          << ovl.second.openedType->getString() << "\n";
       break;
 
     case OverloadChoiceKind::BaseType:
@@ -3109,8 +3121,8 @@ void ConstraintSystem::print(raw_ostream &out) {
     tv->getImpl().print(out);
     if (tv->getImpl().canBindToLValue())
       out << " [lvalue allowed]";
-    if (tv->getImpl().mustBeMaterializable())
-      out << " [must be materializable]";
+    if (tv->getImpl().canBindToInOut())
+      out << " [inout allowed]";
     auto rep = getRepresentative(tv);
     if (rep == tv) {
       if (auto fixed = getFixedType(tv)) {
@@ -3162,9 +3174,9 @@ void ConstraintSystem::print(raw_ostream &out) {
       case OverloadChoiceKind::DeclViaUnwrappedOptional:
         if (choice.getBaseType())
           out << choice.getBaseType()->getString() << ".";
-        out << choice.getDecl()->getName() << ": "
-          << resolved->BoundType->getString() << " == "
-          << resolved->ImpliedType->getString() << "\n";
+        out << choice.getDecl()->getBaseName() << ": "
+            << resolved->BoundType->getString() << " == "
+            << resolved->ImpliedType->getString() << "\n";
         break;
 
       case OverloadChoiceKind::BaseType:
@@ -3435,7 +3447,7 @@ CheckedCastKind TypeChecker::typeCheckCheckedCast(Type fromType,
             diag.fixItReplace(SourceRange(diagLoc, diagToRange.End), "!= nil");
 
             // Add parentheses if needed.
-            if (!fromExpr->canAppendCallParentheses()) {
+            if (!fromExpr->canAppendPostfixExpression()) {
               diag.fixItInsert(fromExpr->getStartLoc(), "(");
               diag.fixItInsertAfter(fromExpr->getEndLoc(), ")");
             }

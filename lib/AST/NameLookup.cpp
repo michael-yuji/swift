@@ -139,7 +139,7 @@ bool swift::removeShadowedDecls(SmallVectorImpl<ValueDecl*> &decls,
                                 const ModuleDecl *curModule,
                                 LazyResolver *typeResolver) {
   // Category declarations by their signatures.
-  llvm::SmallDenseMap<std::pair<CanType, Identifier>,
+  llvm::SmallDenseMap<std::pair<CanType, DeclBaseName>,
                       llvm::TinyPtrVector<ValueDecl *>>
     CollidingDeclGroups;
 
@@ -174,7 +174,7 @@ bool swift::removeShadowedDecls(SmallVectorImpl<ValueDecl*> &decls,
 
     // If we've seen a declaration with this signature before, note it.
     auto &knownDecls =
-        CollidingDeclGroups[std::make_pair(signature, decl->getName())];
+        CollidingDeclGroups[std::make_pair(signature, decl->getBaseName())];
     if (!knownDecls.empty())
       anyCollisions = true;
 
@@ -642,9 +642,12 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
 
             DC = DC->getParent();
 
-            BaseDecl = selfParam;
             ExtendedType = DC->getSelfTypeInContext();
             MetaBaseDecl = DC->getAsNominalTypeOrNominalTypeExtensionContext();
+            if (Ctx.isSwiftVersion3())
+              BaseDecl = MetaBaseDecl;
+            else
+              BaseDecl = selfParam;
 
             isTypeLookup = PBD->isStatic();
           }
@@ -705,7 +708,7 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
             // might be type checking a default argument expression and
             // performing name lookup from there), the base declaration
             // is the nominal type, not 'self'.
-            if (!AFD->isImplicit() &&
+            if ((Ctx.isSwiftVersion3() || !AFD->isImplicit()) &&
                 Loc.isValid() &&
                 AFD->getBodySourceRange().isValid() &&
                 !SM.rangeContainsTokenLoc(AFD->getBodySourceRange(), Loc)) {
@@ -943,7 +946,7 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
     return;
   }
 
-  ModuleDecl *desiredModule = Ctx.getLoadedModule(Name.getBaseName());
+  ModuleDecl *desiredModule = Ctx.getLoadedModule(Name.getBaseIdentifier());
   if (!desiredModule && Name == Ctx.TheBuiltinModule->getName())
     desiredModule = Ctx.TheBuiltinModule;
   if (desiredModule) {

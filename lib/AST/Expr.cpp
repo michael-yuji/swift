@@ -271,12 +271,12 @@ void Expr::propagateLValueAccessKind(AccessKind accessKind,
     void visitKeyPathApplicationExpr(KeyPathApplicationExpr *E,
                                      AccessKind accessKind) {
       if (!GetType(E->getBase())->isLValueType()) return;
-      auto kpDecl = E->getKeyPath()->getType()->castTo<BoundGenericType>()
+      auto kpDecl = GetType(E->getKeyPath())->castTo<BoundGenericType>()
         ->getDecl();
       AccessKind baseAccess;
       // A ReferenceWritableKeyPath only reads its base.
       if (kpDecl ==
-            E->getType()->getASTContext().getReferenceWritableKeyPathDecl())
+          GetType(E)->getASTContext().getReferenceWritableKeyPathDecl())
         baseAccess = AccessKind::Read;
       else
         // Assuming a writable keypath projects a part of the base.
@@ -316,19 +316,25 @@ void Expr::propagateLValueAccessKind(AccessKind accessKind,
 
     void visitOpenExistentialExpr(OpenExistentialExpr *E,
                                   AccessKind accessKind) {
-      bool opaqueValueHadAK = E->getOpaqueValue()->hasLValueAccessKind();
-      AccessKind oldOpaqueValueAK =
-        (opaqueValueHadAK ? E->getOpaqueValue()->getLValueAccessKind()
-                          : AccessKind::Read);
+      AccessKind oldOpaqueValueAK;
+      bool opaqueValueHadAK;
+      if (E->getOpaqueValue()) {
+        opaqueValueHadAK = E->getOpaqueValue()->hasLValueAccessKind();
+        oldOpaqueValueAK =
+            (opaqueValueHadAK ? E->getOpaqueValue()->getLValueAccessKind()
+                              : AccessKind::Read);
+      }
 
       visit(E->getSubExpr(), accessKind);
 
-      // Propagate the new access kind from the OVE to the original existential
-      // if we just set or changed it on the OVE.
-      if (E->getOpaqueValue()->hasLValueAccessKind()) {
-        auto newOpaqueValueAK = E->getOpaqueValue()->getLValueAccessKind();
-        if (!opaqueValueHadAK || newOpaqueValueAK != oldOpaqueValueAK)
-          visit(E->getExistentialValue(), newOpaqueValueAK);
+      if (E->getOpaqueValue()) {
+        // Propagate the new access kind from the OVE to the original
+        // existential if we just set or changed it on the OVE.
+        if (E->getOpaqueValue()->hasLValueAccessKind()) {
+          auto newOpaqueValueAK = E->getOpaqueValue()->getLValueAccessKind();
+          if (!opaqueValueHadAK || newOpaqueValueAK != oldOpaqueValueAK)
+            visit(E->getExistentialValue(), newOpaqueValueAK);
+        }
       }
     }
 
@@ -655,7 +661,7 @@ bool Expr::isSuperExpr() const {
   } while (true);
 }
 
-bool Expr::canAppendCallParentheses() const {
+bool Expr::canAppendPostfixExpression(bool appendingPostfixOperator) const {
   switch (getKind()) {
   case ExprKind::Error:
   case ExprKind::CodeCompletion:
@@ -749,10 +755,12 @@ bool Expr::canAppendCallParentheses() const {
     return false;
 
   case ExprKind::Call:
-  case ExprKind::PostfixUnary:
   case ExprKind::DotSyntaxCall:
   case ExprKind::ConstructorRefCall:
     return true;
+
+  case ExprKind::PostfixUnary:
+    return !appendingPostfixOperator;
 
   case ExprKind::PrefixUnary:
   case ExprKind::Binary:
@@ -784,7 +792,7 @@ bool Expr::canAppendCallParentheses() const {
     // Implicit conversion nodes have no syntax of their own; defer to the
     // subexpression.
     return cast<ImplicitConversionExpr>(this)->getSubExpr()
-      ->canAppendCallParentheses();
+      ->canAppendPostfixExpression(appendingPostfixOperator);
 
   case ExprKind::ForcedCheckedCast:
   case ExprKind::ConditionalCheckedCast:
@@ -1842,12 +1850,12 @@ void AbstractClosureExpr::setParameterList(ParameterList *P) {
     P->setDeclContextOfParamDecls(this);
 }
 
+Type AbstractClosureExpr::getResultType(
+    llvm::function_ref<Type(const Expr *)> getType) const {
+  if (getType(this)->hasError())
+    return getType(this);
 
-Type AbstractClosureExpr::getResultType() const {
-  if (getType()->hasError())
-    return getType();
-
-  return getType()->castTo<FunctionType>()->getResult();
+  return getType(this)->castTo<FunctionType>()->getResult();
 }
 
 bool AbstractClosureExpr::isBodyThrowing() const {

@@ -196,11 +196,12 @@ ParserResult<TypeRepr> Parser::parseTypeSimple(Diag<> MessageID,
     }
     LLVM_FALLTHROUGH;
   default:
-    auto diag = diagnose(Tok, MessageID);
-    // If the next token is closing or separating, the type was likely forgotten
-    if (Tok.isAny(tok::r_paren, tok::r_brace, tok::r_square, tok::arrow,
-                  tok::equal, tok::comma, tok::semi)) {
-      diag.fixItInsert(getEndOfPreviousLoc(), " <#type#>");
+    {
+      auto diag = diagnose(Tok, MessageID);
+      // If the next token is closing or separating, the type was likely forgotten
+      if (Tok.isAny(tok::r_paren, tok::r_brace, tok::r_square, tok::arrow,
+                    tok::equal, tok::comma, tok::semi))
+        diag.fixItInsert(getEndOfPreviousLoc(), " <#type#>");
     }
     if (Tok.isKeyword() && !Tok.isAtStartOfLine()) {
       ty = makeParserErrorResult(new (Context) ErrorTypeRepr(Tok.getLoc()));
@@ -412,8 +413,8 @@ ParserResult<TypeRepr> Parser::parseType(Diag<> MessageID,
       bool walkToTypeReprPre(TypeRepr *T) override {
         if (auto ident = dyn_cast<ComponentIdentTypeRepr>(T)) {
           if (auto decl = ident->getBoundDecl()) {
-            if (isa<GenericTypeParamDecl>(decl))
-              ident->overwriteIdentifier(decl->getName());
+            if (auto genericParam = dyn_cast<GenericTypeParamDecl>(decl))
+              ident->overwriteIdentifier(genericParam->getName());
           }
         }
         return true;

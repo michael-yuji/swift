@@ -1937,7 +1937,7 @@ bool swift::fixDeclarationName(InFlightDiagnostic &diag, ValueDecl *decl,
 
   // Fix the name of the function itself.
   if (name.getBaseName() != targetName.getBaseName()) {
-    diag.fixItReplace(func->getLoc(), targetName.getBaseName().str());
+    diag.fixItReplace(func->getLoc(), targetName.getBaseIdentifier().str());
   }
 
   // Fix the argument names that need fixing.
@@ -2432,7 +2432,7 @@ bool ASTContext::diagnoseObjCMethodConflicts(SourceFile &sf) {
         Diags.diagnose(conflictingDecl, diag::objc_redecl_same,
                        diagInfo.first, diagInfo.second, selector);
         Diags.diagnose(originalDecl, diag::invalid_redecl_prev,
-                       originalDecl->getName());
+                       originalDecl->getBaseName());
       } else {
         Diags.diagnose(conflictingDecl, diag::objc_redecl,
                        diagInfo.first,
@@ -3121,7 +3121,7 @@ static RecursiveTypeProperties
 getGenericFunctionRecursiveProperties(Type Input, Type Result) {
   checkFunctionRecursiveProperties(Input, Result);
 
-  static_assert(RecursiveTypeProperties::BitWidth == 10,
+  static_assert(RecursiveTypeProperties::BitWidth == 11,
                 "revisit this if you add new recursive type properties");
   RecursiveTypeProperties properties;
   if (Result->getRecursiveProperties().hasDynamicSelf())
@@ -3392,7 +3392,7 @@ CanSILFunctionType SILFunctionType::get(GenericSignature *genericSig,
   void *mem = ctx.Allocate(bytes, alignof(SILFunctionType));
 
   RecursiveTypeProperties properties;
-  static_assert(RecursiveTypeProperties::BitWidth == 10,
+  static_assert(RecursiveTypeProperties::BitWidth == 11,
                 "revisit this if you add new recursive type properties");
   for (auto &param : params)
     properties |= param.getType()->getRecursiveProperties();
@@ -3403,8 +3403,10 @@ CanSILFunctionType SILFunctionType::get(GenericSignature *genericSig,
 
   // FIXME: If we ever have first-class polymorphic values, we'll need to
   // revisit this.
-  if (genericSig)
+  if (genericSig) {
     properties.removeHasTypeParameter();
+    properties.removeHasDependentMember();
+  }
 
   auto fnType =
       new (mem) SILFunctionType(genericSig, ext, callee, params, normalResults,
@@ -3549,11 +3551,7 @@ InOutType *InOutType::get(Type objectTy) {
 
 DependentMemberType *DependentMemberType::get(Type base, Identifier name) {
   auto properties = base->getRecursiveProperties();
-  // FIXME: The specific introduction of HasTypeParameter here is due to
-  // type witness inference. See the use of mapErrorTypeToOriginal in
-  // TypeCheckProtocol.cpp.
-  if (!properties.hasTypeVariable() && !properties.hasUnresolvedType())
-    properties |= RecursiveTypeProperties::HasTypeParameter;
+  properties |= RecursiveTypeProperties::HasDependentMember;
   auto arena = getArena(properties);
 
   llvm::PointerUnion<Identifier, AssociatedTypeDecl *> stored(name);
@@ -3571,11 +3569,7 @@ DependentMemberType *DependentMemberType::get(Type base, Identifier name) {
 DependentMemberType *DependentMemberType::get(Type base,
                                               AssociatedTypeDecl *assocType) {
   auto properties = base->getRecursiveProperties();
-  // FIXME: The specific introduction of HasTypeParameter here is due to
-  // type witness inference. See the use of mapErrorTypeToOriginal in
-  // TypeCheckProtocol.cpp.
-  if (!properties.hasTypeVariable() && !properties.hasUnresolvedType())
-    properties |= RecursiveTypeProperties::HasTypeParameter;
+  properties |= RecursiveTypeProperties::HasDependentMember;
   auto arena = getArena(properties);
 
   llvm::PointerUnion<Identifier, AssociatedTypeDecl *> stored(assocType);

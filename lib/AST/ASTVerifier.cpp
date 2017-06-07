@@ -446,7 +446,19 @@ public:
     bool shouldVerify(Decl *S) { return true; }
 
     // Default cases for whether we should verify a checked subtree.
-    bool shouldVerifyChecked(Expr *E) { return !E->getType().isNull(); }
+    bool shouldVerifyChecked(Expr *E) {
+      if (!E->getType()) {
+        // For @objc enums, we serialize the pre-type-checked integer
+        // literal raw values, and thus when they are deserialized
+        // they do not have a type on them.
+        if (!isa<IntegerLiteralExpr>(E)) {
+          Out << "expression has no type\n";
+          E->print(Out);
+          abort();
+        }
+      }
+      return true;
+    }
     bool shouldVerifyChecked(Stmt *S) { return true; }
     bool shouldVerifyChecked(Pattern *S) { return S->hasType(); }
     bool shouldVerifyChecked(Decl *S) { return true; }
@@ -506,8 +518,9 @@ public:
       // Some imported expressions don't have types, even in checked mode.
       // TODO: eliminate all these
       if (!E->getType()) {
-        // The raw value of an imported EnumElementDecl doesn't seem to have
-        // a type for some reason.
+        // For @objc enums, we serialize the pre-type-checked integer
+        // literal raw values, and thus when they are deserialized
+        // they do not have a type on them.
         if (!isa<IntegerLiteralExpr>(E)) {
           Out << "expression has no type\n";
           E->print(Out);
@@ -697,6 +710,11 @@ public:
       if (!shouldVerify(cast<Expr>(expr)))
         return false;
 
+      // In rare instances we clear the opaque value because we no
+      // longer have a subexpression that references it.
+      if (!expr->getOpaqueValue())
+        return true;
+
       assert(!OpaqueValues.count(expr->getOpaqueValue()));
       OpaqueValues[expr->getOpaqueValue()] = 0;
       assert(OpenedExistentialArchetypes.count(expr->getOpenedArchetype())==0);
@@ -705,6 +723,11 @@ public:
     }
 
     void cleanup(OpenExistentialExpr *expr) {
+      // In rare instances we clear the opaque value because we no
+      // longer have a subexpression that references it.
+      if (!expr->getOpaqueValue())
+        return;
+
       assert(OpaqueValues.count(expr->getOpaqueValue()));
       OpaqueValues.erase(expr->getOpaqueValue());
       assert(OpenedExistentialArchetypes.count(expr->getOpenedArchetype())==1);
@@ -2277,7 +2300,7 @@ public:
             dumpRef(decl);
             Out << " is missing witness for "
                 << conformance->getProtocol()->getName().str() 
-                << "." << req->getName().str()
+                << "." << req->getBaseName()
                 << "\n";
             abort();
           }

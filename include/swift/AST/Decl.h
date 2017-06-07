@@ -2137,7 +2137,7 @@ public:
 
   /// Retrieve the base name of the declaration, ignoring any argument
   /// names.
-  DeclName getBaseName() const { return Name.getBaseName(); }
+  DeclBaseName getBaseName() const { return Name.getBaseName(); }
 
   /// Retrieve the name to use for this declaration when interoperating
   /// with the Objective-C runtime.
@@ -2372,6 +2372,9 @@ public:
     return D->getKind() >= DeclKind::First_TypeDecl &&
            D->getKind() <= DeclKind::Last_TypeDecl;
   }
+
+  /// Compute an ordering between two type declarations that is ABI-stable.
+  static int compare(const TypeDecl *type1, const TypeDecl *type2);
 };
 
 /// A type declaration that can have generic parameters attached to it.  Because

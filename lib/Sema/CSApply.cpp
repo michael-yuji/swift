@@ -259,18 +259,22 @@ void ConstraintSystem::propagateLValueAccessKind(Expr *E,
                                allowOverwrite);
 }
 
-bool ConstraintSystem::isTypeReference(Expr *E) {
+bool ConstraintSystem::isTypeReference(const Expr *E) {
   return E->isTypeReference([&](const Expr *E) -> Type { return getType(E); });
 }
 
-bool ConstraintSystem::isStaticallyDerivedMetatype(Expr *E) {
+bool ConstraintSystem::isStaticallyDerivedMetatype(const Expr *E) {
   return E->isStaticallyDerivedMetatype(
       [&](const Expr *E) -> Type { return getType(E); });
 }
 
-Type ConstraintSystem::getInstanceType(TypeExpr *E) {
+Type ConstraintSystem::getInstanceType(const TypeExpr *E) {
   return E->getInstanceType([&](const Expr *E) -> bool { return hasType(E); },
                             [&](const Expr *E) -> Type { return getType(E); });
+}
+
+Type ConstraintSystem::getResultType(const AbstractClosureExpr *E) {
+  return E->getResultType([&](const Expr *E) -> Type { return getType(E); });
 }
 
 static bool buildObjCKeyPathString(KeyPathExpr *E,
@@ -760,6 +764,12 @@ namespace {
         if (result == nullptr) {
           result = new (tc.Context) ErrorExpr(range);
           cs.setType(result, erasedTy);
+          // The opaque value is no longer reachable in an AST walk as
+          // a result of the result above being replaced with an
+          // ErrorExpr, but there is code expecting to have a type set
+          // on it. Since we no longer have a reachable reference,
+          // we'll null this out.
+          record.OpaqueValue = nullptr;
         }
       }
 
@@ -768,7 +778,7 @@ namespace {
       // means this is our only chance to propagate the l-value access kind
       // down to the original existential value.  Otherwise, propagateLVAK
       // will handle this.
-      if (record.OpaqueValue->hasLValueAccessKind())
+      if (record.OpaqueValue && record.OpaqueValue->hasLValueAccessKind())
         cs.propagateLValueAccessKind(record.ExistentialValue,
                                   record.OpaqueValue->getLValueAccessKind());
 
@@ -1303,24 +1313,53 @@ namespace {
       // Apply a key path if we have one.
       if (choice.getKind() == OverloadChoiceKind::KeyPathApplication) {
         // The index argument should be (keyPath: KeyPath<Root, Value>).
-        auto keyPathTy = index->getType()->castTo<TupleType>()
-          ->getElementType(0)->castTo<BoundGenericType>();
-        auto valueTy = keyPathTy->getGenericArgs()[1];
+        auto keyPathTTy = cs.getType(index)->castTo<TupleType>()
+          ->getElementType(0);
         
-        // The result may be an lvalue based on the base and key path kind.
+        Type valueTy;
         bool resultIsLValue;
-        if (keyPathTy->getDecl() == cs.getASTContext().getKeyPathDecl()) {
-          resultIsLValue = false;
-          base = cs.coerceToRValue(base);
-        } else if (keyPathTy->getDecl() ==
-                     cs.getASTContext().getWritableKeyPathDecl()) {
-          resultIsLValue = base->getType()->isLValueType();
-        } else if (keyPathTy->getDecl() ==
-                   cs.getASTContext().getReferenceWritableKeyPathDecl()) {
-          resultIsLValue = true;
-          base = cs.coerceToRValue(base);
+        
+        if (auto nom = keyPathTTy->getAs<NominalType>()) {
+          // AnyKeyPath is <T> rvalue T -> rvalue Any?
+          if (nom->getDecl() == cs.getASTContext().getAnyKeyPathDecl()) {
+            valueTy = ProtocolCompositionType::get(cs.getASTContext(), {},
+                                                  /*explicit anyobject*/ false);
+            valueTy = OptionalType::get(valueTy);
+            resultIsLValue = false;
+            base = cs.coerceToRValue(base);
+          } else {
+            llvm_unreachable("unknown key path class!");
+          }
         } else {
-          llvm_unreachable("unknown key path class!");
+          auto keyPathBGT = keyPathTTy->castTo<BoundGenericType>();
+          
+          if (keyPathBGT->getDecl()
+                == cs.getASTContext().getPartialKeyPathDecl()) {
+            // PartialKeyPath<T> is rvalue T -> rvalue Any
+            valueTy = ProtocolCompositionType::get(cs.getASTContext(), {},
+                                                 /*explicit anyobject*/ false);
+            resultIsLValue = false;
+            base = cs.coerceToRValue(base);
+          } else {
+            // *KeyPath<T, U> is T -> U, with rvalueness based on mutability
+            // of base and keypath
+            valueTy = keyPathBGT->getGenericArgs()[1];
+        
+            // The result may be an lvalue based on the base and key path kind.
+            if (keyPathBGT->getDecl() == cs.getASTContext().getKeyPathDecl()) {
+              resultIsLValue = false;
+              base = cs.coerceToRValue(base);
+            } else if (keyPathBGT->getDecl() ==
+                         cs.getASTContext().getWritableKeyPathDecl()) {
+              resultIsLValue = cs.getType(base)->isLValueType();
+            } else if (keyPathBGT->getDecl() ==
+                       cs.getASTContext().getReferenceWritableKeyPathDecl()) {
+              resultIsLValue = true;
+              base = cs.coerceToRValue(base);
+            } else {
+              llvm_unreachable("unknown key path class!");
+            }
+          }
         }
         if (resultIsLValue)
           valueTy = LValueType::get(valueTy);
@@ -1693,7 +1732,7 @@ namespace {
 
       // Form the arguments.
       Expr *args[2] = {
-        cs.cacheType(object),
+        object,
         cs.cacheType(
             new (tc.Context) DotSelfExpr(
                 TypeExpr::createImplicitHack(object->getLoc(),
@@ -2119,6 +2158,26 @@ namespace {
             diag::extended_grapheme_cluster_literal_broken_proto;
         brokenBuiltinProtocolDiag =
             diag::builtin_extended_grapheme_cluster_literal_broken_proto;
+
+        auto *builtinUTF16ExtendedGraphemeClusterProtocol = tc.getProtocol(
+            expr->getLoc(),
+            KnownProtocolKind::ExpressibleByBuiltinUTF16ExtendedGraphemeClusterLiteral);
+        if (tc.conformsToProtocol(type,
+                                  builtinUTF16ExtendedGraphemeClusterProtocol,
+                                  cs.DC, ConformanceCheckFlags::InExpression)) {
+          builtinLiteralFuncName
+            = DeclName(tc.Context, tc.Context.Id_init,
+                       { tc.Context.Id_builtinExtendedGraphemeClusterLiteral,
+                         tc.Context.getIdentifier("utf16CodeUnitCount") });
+
+          builtinProtocol = builtinUTF16ExtendedGraphemeClusterProtocol;
+          brokenBuiltinProtocolDiag =
+            diag::builtin_utf16_extended_grapheme_cluster_literal_broken_proto;
+          if (stringLiteral)
+            stringLiteral->setEncoding(StringLiteralExpr::UTF16);
+          else
+            magicLiteral->setStringEncoding(StringLiteralExpr::UTF16);
+        }
       } else {
         // Otherwise, we should have just one Unicode scalar.
         literalType = tc.Context.Id_UnicodeScalarLiteralType;
@@ -2522,7 +2581,7 @@ namespace {
         bool diagnoseBadInitRef = true;
         auto arg = base->getSemanticsProvidingExpr();
         if (auto dre = dyn_cast<DeclRefExpr>(arg)) {
-          if (dre->getDecl()->getName() == cs.getASTContext().Id_self) {
+          if (dre->getDecl()->getFullName() == cs.getASTContext().Id_self) {
             // We have a reference to 'self'.
             diagnoseBadInitRef = false;
 
@@ -2787,8 +2846,10 @@ namespace {
                             /*Implicit=*/true,
                             argType);
 
-      cs.cacheExprTypes(typeRef);
+      cs.cacheExprTypes(arg);
+
       cs.setExprTypes(typeRef);
+      cs.setExprTypes(arg);
 
       Expr *result = tc.callWitness(typeRef, dc, arrayProto, *conformance,
                                     name, arg, diag::array_protocol_broken);
@@ -2867,8 +2928,10 @@ namespace {
                               /*Implicit=*/false,
                               argType);
 
-      cs.cacheExprTypes(typeRef);
+      cs.cacheExprTypes(arg);
+
       cs.setExprTypes(typeRef);
+      cs.setExprTypes(arg);
 
       Expr *result = tc.callWitness(typeRef, dc, dictionaryProto,
                                     *conformance, name, arg,
@@ -3582,7 +3645,7 @@ namespace {
       // already.
       Expr *simplified = simplifyExprType(expr);
       if (!SuppressDiagnostics
-          && !simplified->getType()->is<UnresolvedType>()) {
+          && !cs.getType(simplified)->is<UnresolvedType>()) {
         cs.TC.diagnose(simplified->getLoc(), diag::pattern_in_expr,
                        expr->getSubPattern()->getKind());
       }
@@ -3969,7 +4032,7 @@ namespace {
 
       simplifyExprType(E);
       
-      if (E->getType()->hasError())
+      if (cs.getType(E)->hasError())
         return E;
 
       // If a component is already resolved, then all of them should be
@@ -4309,6 +4372,12 @@ resolveLocatorToDecl(ConstraintSystem &cs, ConstraintLocator *locator,
       anchor = dotSyntax->getRHS();
       continue;
     }
+
+    if (auto *OEE = dyn_cast<OpenExistentialExpr>(anchor)) {
+      anchor = OEE->getSubExpr();
+      continue;
+    }
+
     break;
   } while (true);
   
@@ -4445,6 +4514,7 @@ findCalleeDeclRef(ConstraintSystem &cs, const Solution &solution,
     } else {
       newPath.push_back(ConstraintLocator::ApplyFunction);
     }
+
     assert(newPath.back().getNewSummaryFlags() == 0 &&
            "added element that changes the flags?");
     locator = cs.getConstraintLocator(locator->getAnchor(), newPath, newFlags);
@@ -5551,6 +5621,18 @@ Expr *ExprRewriter::coerceCallArguments(
   return shuffle;
 }
 
+static ClosureExpr *getClosureLiteralExpr(Expr *expr) {
+  expr = expr->getSemanticsProvidingExpr();
+
+  if (auto *captureList = dyn_cast<CaptureListExpr>(expr))
+    return captureList->getClosureBody();
+
+  if (auto *closure = dyn_cast<ClosureExpr>(expr))
+    return closure;
+
+  return nullptr;
+}
+
 /// If the expression is an explicit closure expression (potentially wrapped in
 /// IdentityExprs), change the type of the closure and identities to the
 /// specified type and return true.  Otherwise, return false with no effect.
@@ -5563,11 +5645,19 @@ static bool applyTypeToClosureExpr(ConstraintSystem &cs,
     return true;
   }
 
+  // Look through capture lists.
+  if (auto CLE = dyn_cast<CaptureListExpr>(expr)) {
+    if (!applyTypeToClosureExpr(cs, CLE->getClosureBody(), toType)) return false;
+    cs.setType(CLE, toType);
+    return true;
+  }
+
   // If we found an explicit ClosureExpr, update its type.
   if (auto CE = dyn_cast<ClosureExpr>(expr)) {
     cs.setType(CE, toType);
     return true;
   }
+
   // Otherwise fail.
   return false;
 }
@@ -5801,6 +5891,8 @@ Expr *ExprRewriter::buildCollectionUpcastExpr(Expr *expr, Type toType,
 
 Expr *ExprRewriter::buildObjCBridgeExpr(Expr *expr, Type toType,
                                         ConstraintLocatorBuilder locator) {
+  auto &tc = cs.getTypeChecker();
+
   Type fromType = cs.getType(expr);
 
   // Bridged collection casts always succeed, so we treat them as
@@ -5822,6 +5914,20 @@ Expr *ExprRewriter::buildObjCBridgeExpr(Expr *expr, Type toType,
     Expr *objcExpr = bridgeToObjectiveC(expr);
     if (!objcExpr)
       return nullptr;
+
+    // We might have a coercion of a Swift type to a CF type toll-free
+    // bridged to Objective-C.
+    //
+    // FIXME: Ideally we would instead have already recorded a restriction
+    // when solving the constraint, and we wouldn't need to duplicate this
+    // part of coerceToType() here.
+    if (auto foreignClass = toType->getClassOrBoundGenericClass()) {
+      if (foreignClass->getForeignClassKind() ==
+            ClassDecl::ForeignKind::CFType) {
+        return cs.cacheType(
+          new (tc.Context) ForeignObjectConversionExpr(objcExpr, toType));
+      }
+    }
 
     return coerceToType(objcExpr, toType, locator);
   }
@@ -6872,7 +6978,16 @@ Expr *ExprRewriter::finishApply(ApplyExpr *apply, Type openedType,
     // Use the subexpression as the function.
     fn = covariant->getSubExpr();
   }
-  
+
+  // An immediate application of a closure literal is always noescape.
+  if (getClosureLiteralExpr(fn)) {
+    if (auto fnTy = cs.getType(fn)->getAs<FunctionType>()) {
+      fnTy = cast<FunctionType>(
+        fnTy->withExtInfo(fnTy->getExtInfo().withNoEscape()));
+      fn = coerceToType(fn, fnTy, locator);
+    }
+  }
+
   apply->setFn(fn);
 
   // Check whether the argument is 'super'.
@@ -6970,18 +7085,22 @@ Expr *ExprRewriter::finishApply(ApplyExpr *apply, Type openedType,
   auto metaTy = cs.getType(fn)->castTo<AnyMetatypeType>();
   auto ty = metaTy->getInstanceType();
 
-  // If this is an UnresolvedType in the system, preserve it.
-  if (ty->is<UnresolvedType>()) {
-    cs.setType(apply, ty);
-    return apply;
-  }
-
-  // If the metatype value isn't a type expression, the user should reference
-  // '.init' explicitly, for clarity.
   if (!cs.isTypeReference(fn)) {
-    cs.TC.diagnose(apply->getArg()->getStartLoc(),
-                   diag::missing_init_on_metatype_initialization)
-      .fixItInsert(apply->getArg()->getStartLoc(), ".init");
+    bool isExistentialType = false;
+    // If this is an attempt to initialize existential type.
+    if (auto metaType = cs.getType(fn)->getAs<MetatypeType>()) {
+      auto instanceType = metaType->getInstanceType();
+      isExistentialType = instanceType->isExistentialType();
+    }
+
+    if (!isExistentialType) {
+      // If the metatype value isn't a type expression,
+      // the user should reference '.init' explicitly, for clarity.
+      cs.TC
+          .diagnose(apply->getArg()->getStartLoc(),
+                    diag::missing_init_on_metatype_initialization)
+          .fixItInsert(apply->getArg()->getStartLoc(), ".init");
+    }
   }
 
   // If we're "constructing" a tuple type, it's simply a conversion.
@@ -6992,12 +7111,18 @@ Expr *ExprRewriter::finishApply(ApplyExpr *apply, Type openedType,
 
   // We're constructing a value of nominal type. Look for the constructor or
   // enum element to use.
-  assert(ty->getNominalOrBoundGenericNominal() || ty->is<DynamicSelfType>() ||
-         ty->isExistentialType() || ty->is<ArchetypeType>());
   auto ctorLocator = cs.getConstraintLocator(
                  locator.withPathElement(ConstraintLocator::ApplyFunction)
                         .withPathElement(ConstraintLocator::ConstructorMember));
   auto selected = getOverloadChoiceIfAvailable(ctorLocator);
+  if (!selected) {
+    assert(ty->hasError() || ty->hasUnresolvedType());
+    cs.setType(apply, ty);
+    return apply;
+  }
+
+  assert(ty->getNominalOrBoundGenericNominal() || ty->is<DynamicSelfType>() ||
+         ty->isExistentialType() || ty->is<ArchetypeType>());
 
   // We have the constructor.
   auto choice = selected->choice;
@@ -7164,17 +7289,6 @@ static bool exprNeedsParensAfterAddingAs(TypeChecker &TC, DeclContext *DC,
                              SourceLoc());
   if (!asPG) return true;
   return exprNeedsParensOutsideFollowingOperator(TC, DC, expr, rootExpr, asPG);
-}
-
-static bool exprNeedsParensInsidePostfixOperator(TypeChecker &TC,
-                                                 DeclContext *DC,
-                                                 Expr *expr) {
-  // Prefix and infix operators will bind outside of a postfix operator.
-  // Postfix operators will get token-merged with a new postfix operator.
-  return (isa<PrefixUnaryExpr>(expr) ||
-          isa<PostfixUnaryExpr>(expr) ||
-          isa<OptionalEvaluationExpr>(expr) ||
-          expr->isInfixOperator());
 }
 
 namespace {
@@ -7374,14 +7488,11 @@ bool ConstraintSystem::applySolutionFix(Expr *expr,
     } else {
       auto diag = TC.diagnose(affected->getLoc(),
                               diag::missing_unwrap_optional, type);
-      bool parensNeeded =
-        exprNeedsParensInsidePostfixOperator(TC, DC, affected);
-
-      if (parensNeeded) {
+      if (affected->canAppendPostfixExpression(true)) {
+        diag.fixItInsertAfter(affected->getEndLoc(), "!");
+      } else {
         diag.fixItInsert(affected->getStartLoc(), "(")
             .fixItInsertAfter(affected->getEndLoc(), ")!");
-      } else {
-        diag.fixItInsertAfter(affected->getEndLoc(), "!");
       }
     }
     return true;

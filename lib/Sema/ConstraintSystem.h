@@ -122,12 +122,12 @@ enum TypeVariableOptions {
   /// Whether the type variable can be bound to an lvalue type or not.
   TVO_CanBindToLValue = 0x01,
 
+  /// Whether the type variable can be bound to an inout type or not.
+  TVO_CanBindToInOut = 0x02,
+
   /// Whether a more specific deduction for this type variable implies a
   /// better solution to the constraint system.
-  TVO_PrefersSubtypeBinding = 0x02,
-
-  /// Whether the variable must be bound to a materializable type.
-  TVO_MustBeMaterializable = 0x04
+  TVO_PrefersSubtypeBinding = 0x04
 };
 
 /// \brief The implementation object for a type variable used within the
@@ -170,6 +170,9 @@ public:
   /// Whether this type variable can bind to an lvalue type.
   bool canBindToLValue() const { return Options & TVO_CanBindToLValue; }
 
+  /// Whether this type variable can bind to an inout type.
+  bool canBindToInOut() const { return Options & TVO_CanBindToInOut; }
+
   /// Whether this type variable prefers a subtype binding over a supertype
   /// binding.
   bool prefersSubtypeBinding() const {
@@ -177,7 +180,7 @@ public:
   }
 
   bool mustBeMaterializable() const {
-    return Options & TVO_MustBeMaterializable;
+    return !(Options & TVO_CanBindToInOut) && !(Options & TVO_CanBindToLValue);
   }
 
   /// \brief Retrieve the type variable associated with this implementation.
@@ -297,7 +300,8 @@ public:
     if (!mustBeMaterializable() && otherRep->getImpl().mustBeMaterializable()) {
       if (record)
         recordBinding(*record);
-      Options |= TVO_MustBeMaterializable;
+      Options &= ~TVO_CanBindToLValue;
+      Options &= ~TVO_CanBindToInOut;
     }
   }
 
@@ -338,7 +342,8 @@ public:
     if (!rep->getImpl().mustBeMaterializable()) {
       if (record)
         rep->getImpl().recordBinding(*record);
-      rep->getImpl().Options |= TVO_MustBeMaterializable;
+      rep->getImpl().Options &= ~TVO_CanBindToLValue;
+      rep->getImpl().Options &= ~TVO_CanBindToInOut;
     }
   }
 
@@ -403,16 +408,14 @@ enum ScoreKind {
   SK_CollectionUpcastConversion,
   /// A value-to-optional conversion.
   SK_ValueToOptional,
-  /// A conversion from an inout to a pointer of matching element type.
-  SK_ScalarPointerConversion,
-  /// A conversion from an array to a pointer of matching element type.
-  SK_ArrayPointerConversion,
   /// A conversion to an empty existential type ('Any' or '{}').
   SK_EmptyExistentialConversion,
   /// A key path application subscript.
   SK_KeyPathSubscript,
-  
-  SK_LastScoreKind = SK_EmptyExistentialConversion,
+  /// A conversion from a string, array, or inout to a pointer.
+  SK_ValueToPointerConversion,
+
+  SK_LastScoreKind = SK_ValueToPointerConversion,
 };
 
 /// The number of score kinds.
@@ -844,6 +847,7 @@ public:
   friend class Fix;
   friend class OverloadChoice;
   friend class ConstraintGraph;
+  friend class DisjunctionChoice;
 
   class SolverScope;
 
@@ -992,15 +996,45 @@ private:
     /// \brief Try to solve this candidate sub-expression
     /// and re-write it's OSR domains afterwards.
     ///
+    /// \param shrunkExprs The set of expressions which
+    /// domains have been successfully shrunk so far.
+    ///
     /// \returns true on solver failure, false otherwise.
-    bool solve();
+    bool solve(llvm::SmallDenseSet<Expr *> &shrunkExprs);
 
     /// \brief Apply solutions found by solver as reduced OSR sets for
     /// for current and all of it's sub-expressions.
     ///
     /// \param solutions The solutions found by running solver on the
     /// this candidate expression.
-    void applySolutions(llvm::SmallVectorImpl<Solution> &solutions) const;
+    ///
+    /// \param shrunkExprs The set of expressions which
+    /// domains have been successfully shrunk so far.
+    void applySolutions(llvm::SmallVectorImpl<Solution> &solutions,
+                        llvm::SmallDenseSet<Expr *> &shrunkExprs) const;
+
+    /// Check if attempt at solving of the candidate makes sense given
+    /// the current conditions - number of shrunk domains which is related
+    /// to the given candidate over the total number of disjunctions present.
+    static bool isTooComplexGiven(ConstraintSystem *const cs,
+                                  llvm::SmallDenseSet<Expr *> &shrunkExprs) {
+      SmallVector<Constraint *, 8> disjunctions;
+      cs->collectDisjunctions(disjunctions);
+
+      unsigned unsolvedDisjunctions = disjunctions.size();
+      for (auto *disjunction : disjunctions) {
+        auto *locator = disjunction->getLocator();
+        if (!locator)
+          continue;
+
+        if (auto *anchor = locator->getAnchor()) {
+          if (shrunkExprs.count(anchor) > 0)
+            --unsolvedDisjunctions;
+        }
+      }
+
+      return unsolvedDisjunctions >= 5;
+    }
   };
 
   /// \brief Describes the current solver state.
@@ -1190,14 +1224,6 @@ private:
     SetExprTypes(Expr *expr, ConstraintSystem &cs, bool excludeRoot)
         : RootExpr(expr), CS(cs), ExcludeRoot(excludeRoot) {}
 
-    std::pair<bool, Expr *> walkToExprPre(Expr *expr) override {
-      if (auto *closure = dyn_cast<ClosureExpr>(expr))
-        if (!closure->hasSingleExpressionBody())
-          return { false, closure };
-
-      return { true, expr };
-    }
-
     Expr *walkToExprPost(Expr *expr) override {
       if (ExcludeRoot && expr == RootExpr)
         return expr;
@@ -1262,12 +1288,6 @@ public:
   /// constructions) to the argument labels provided in the call to
   /// that locator.
   llvm::DenseMap<ConstraintLocator *, ArgumentLabelState> ArgumentLabels;
-
-  /// \brief The set of additional attributes inferred for a FunctionType.  Note
-  /// that this is not state kept as part of SolverState, so it only supports
-  /// function attributes that need to be set invariant of the actual typing of
-  /// the solution.
-  llvm::SmallDenseMap<FunctionType*, FunctionType::ExtInfo> extraFunctionAttrs;
 
   ResolvedOverloadSetListItem *getResolvedOverloadSets() const {
     return resolvedOverloadSets;
@@ -1854,18 +1874,23 @@ public:
   /// Call Expr::isTypeReference on the given expression, using a
   /// custom accessor for the type on the expression that reads the
   /// type from the ConstraintSystem expression type map.
-  bool isTypeReference(Expr *E);
+  bool isTypeReference(const Expr *E);
 
   /// Call Expr::isIsStaticallyDerivedMetatype on the given
   /// expression, using a custom accessor for the type on the
   /// expression that reads the type from the ConstraintSystem
   /// expression type map.
-  bool isStaticallyDerivedMetatype(Expr *E);
+  bool isStaticallyDerivedMetatype(const Expr *E);
 
-  /// Call Expr::getInstanceType on the given expression, using a
+  /// Call TypeExpr::getInstanceType on the given expression, using a
   /// custom accessor for the type on the expression that reads the
   /// type from the ConstraintSystem expression type map.
-  Type getInstanceType(TypeExpr *E);
+  Type getInstanceType(const TypeExpr *E);
+
+  /// Call AbstractClosureExpr::getResultType on the given expression,
+  /// using a custom accessor for the type on the expression that
+  /// reads the type from the ConstraintSystem expression type map.
+  Type getResultType(const AbstractClosureExpr *E);
 
 private:
   /// Introduce the constraints associated with the given type variable
@@ -2327,6 +2352,8 @@ public:
 
   /// \brief Simplify the given constraint.
   SolutionKind simplifyConstraint(const Constraint &constraint);
+  /// \brief Simplify the given disjunction choice.
+  void simplifyDisjunctionChoice(Constraint *choice);
 
 private:
   /// \brief Add a constraint to the constraint system.
@@ -2654,6 +2681,45 @@ void simplifyLocator(Expr *&anchor,
                      SmallVectorImpl<LocatorPathElt> &targetPath,
                      SourceRange &range);
 
+class DisjunctionChoice {
+  ConstraintSystem *CS;
+  Constraint *Choice;
+
+public:
+  DisjunctionChoice(ConstraintSystem *const cs, Constraint *constraint)
+      : CS(cs), Choice(constraint) {}
+
+  Constraint *operator&() const { return Choice; }
+
+  Constraint *getConstraint() const { return Choice; }
+
+  Constraint *operator->() const { return Choice; }
+
+  bool isDisabled() const { return Choice->isDisabled(); }
+
+  // FIXME: Both of the accessors below are required to support
+  //        performance optimization hacks in constraint solver.
+
+  bool isGenericOperatorOrUnavailable() const;
+  bool isSymmetricOperator() const;
+
+  /// \brief Apply given choice to the system and try to solve it.
+  Optional<Score> solve(SmallVectorImpl<Solution> &solutions,
+                        FreeTypeVariableBinding allowFreeTypeVariables);
+
+private:
+  static ValueDecl *getOperatorDecl(Constraint *constraint) {
+    if (constraint->getKind() != ConstraintKind::BindOverload)
+      return nullptr;
+
+    auto choice = constraint->getOverloadChoice();
+    if (choice.getKind() != OverloadChoiceKind::Decl)
+      return nullptr;
+
+    auto *decl = choice.getDecl();
+    return decl->isOperator() ? decl : nullptr;
+  }
+};
 } // end namespace constraints
 
 template<typename ...Args>

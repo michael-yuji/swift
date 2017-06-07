@@ -1,4 +1,3 @@
-// RUN: %target-typecheck-verify-swift -parse-as-library -swift-version 3
 // RUN: %target-typecheck-verify-swift -parse-as-library -swift-version 4
 
 lazy func lazy_func() {} // expected-error {{'lazy' may only be used on 'var' declarations}} {{1-6=}}
@@ -143,13 +142,38 @@ class ReferenceSelfInLazyProperty : BaseClass {
   lazy var cqtrefs: (Int, Int) = { (self.i, self.f()) }()
 
   lazy var mrefs = { () -> (Int, Int) in return (i, f()) }()
-  // expected-error@-1 {{call to method 'f' in closure requires explicit 'self.' to make capture semantics explicit}}
-  // expected-error@-2 {{reference to property 'i' in closure requires explicit 'self.' to make capture semantics explicit}}
   lazy var mtrefs: (Int, Int) = { return (i, f()) }()
 
   lazy var mqrefs = { () -> (Int, Int) in (self.i, self.f()) }()
   lazy var mqtrefs: (Int, Int) = { return (self.i, self.f()) }()
 
+  lazy var lcqrefs = { [unowned self] in (self.i, self.f()) }()
+  lazy var lcqtrefs: (Int, Int) = { [unowned self] in (self.i, self.f()) }()
+
+  lazy var lmrefs = { [unowned self] () -> (Int, Int) in return (i, f()) }()
+  lazy var lmtrefs: (Int, Int) = { [unowned self] in return (i, f()) }()
+
+  lazy var lmqrefs = { [unowned self] () -> (Int, Int) in (self.i, self.f()) }()
+  lazy var lmqtrefs: (Int, Int) = { [unowned self] in return (self.i, self.f()) }()
+
   var i = 42
   func f() -> Int { return 0 }
+
+  lazy var refBaseClassProp = baseInstanceProp
+}
+
+class ReferenceStaticInLazyProperty {
+  lazy var refs1 = i
+  // expected-error@-1 {{static member 'i' cannot be used on instance of type 'ReferenceStaticInLazyProperty'}}
+  lazy var refs2 = f()
+  // expected-error@-1 {{static member 'f' cannot be used on instance of type 'ReferenceStaticInLazyProperty'}}
+
+  lazy var trefs1: Int = i
+  // expected-error@-1 {{static member 'i' cannot be used on instance of type 'ReferenceStaticInLazyProperty'}}
+
+  lazy var trefs2: Int = f()
+  // expected-error@-1 {{static member 'f' cannot be used on instance of type 'ReferenceStaticInLazyProperty'}}
+
+  static var i = 42
+  static func f() -> Int { return 0 }
 }

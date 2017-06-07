@@ -334,7 +334,7 @@ struct APIDiffMigratorPass : public ASTMigratorPass, public SourceEntityWalker {
       if (Idx < NewName.argSize()) {
         auto Label = NewName.args()[Idx++];
 
-        if (Label != "_") {
+        if (!Label.empty()) {
           if (LR.getByteLength())
             Editor.replace(LR, Label);
           else
@@ -364,6 +364,25 @@ struct APIDiffMigratorPass : public ASTMigratorPass, public SourceEntityWalker {
       }
       emitRenameLabelChanges(Arg, View, {});
     }
+  }
+
+  bool handleQualifiedReplacement(Expr* Call) {
+    if (auto *DSC = dyn_cast<DotSyntaxCallExpr>(Call)) {
+      if (auto FD = DSC->getFn()->getReferencedDecl().getDecl()) {
+        for (auto *I :getRelatedDiffItems(FD)) {
+          if (auto *Item = dyn_cast<TypeMemberDiffItem>(I)) {
+            if (Item->Subkind == TypeMemberDiffItemSubKind::
+                QualifiedReplacement) {
+              Editor.replace(Call->getSourceRange(),
+                (llvm::Twine(Item->newTypeName) + "." +
+                  Item->getNewName().base()).str());
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
   }
 
   bool handleSpecialCases(ValueDecl *FD, CallExpr* Call, Expr *Arg) {
@@ -439,7 +458,8 @@ struct APIDiffMigratorPass : public ASTMigratorPass, public SourceEntityWalker {
     }
     if (!Item)
       return false;
-    if (Item->Subkind == TypeMemberDiffItemSubKind::SimpleReplacement)
+    if (Item->Subkind == TypeMemberDiffItemSubKind::SimpleReplacement ||
+        Item->Subkind == TypeMemberDiffItemSubKind::QualifiedReplacement)
       return false;
 
     if (Item->Subkind == TypeMemberDiffItemSubKind::GlobalFuncToStaticProperty) {
@@ -463,7 +483,7 @@ struct APIDiffMigratorPass : public ASTMigratorPass, public SourceEntityWalker {
     auto *SelfExpr = AllArgs[0].ArgExp;
     if (auto *IOE = dyn_cast<InOutExpr>(SelfExpr))
       SelfExpr = IOE->getSubExpr();
-    const bool NeedParen = !SelfExpr->canAppendCallParentheses();
+    const bool NeedParen = !SelfExpr->canAppendPostfixExpression();
 
     // Remove the global function name: "Foo(a, b..." to "a, b..."
     Editor.remove(CharSourceRange(SM, Call->getStartLoc(),
@@ -490,6 +510,7 @@ struct APIDiffMigratorPass : public ASTMigratorPass, public SourceEntityWalker {
     switch (Item->Subkind) {
     case TypeMemberDiffItemSubKind::GlobalFuncToStaticProperty:
     case TypeMemberDiffItemSubKind::SimpleReplacement:
+    case TypeMemberDiffItemSubKind::QualifiedReplacement:
       llvm_unreachable("should be handled elsewhere");
     case TypeMemberDiffItemSubKind::HoistSelfOnly:
       // we are done here.
@@ -546,8 +567,9 @@ struct APIDiffMigratorPass : public ASTMigratorPass, public SourceEntityWalker {
   }
 
   bool walkToExprPre(Expr *E) override {
+    if (handleQualifiedReplacement(E))
+      return false;
     if (auto *CE = dyn_cast<CallExpr>(E)) {
-
       auto Fn = CE->getFn();
       auto Args = CE->getArg();
       switch (Fn->getKind()) {
@@ -670,7 +692,7 @@ struct APIDiffMigratorPass : public ASTMigratorPass, public SourceEntityWalker {
     switch (DiffItem->DiffKind) {
     case NodeAnnotation::GetterToProperty: {
       auto FuncLoc = FD->getFuncLoc();
-      auto ReturnTyLoc = FD->getBodyResultTypeLoc().getLoc();
+      auto ReturnTyLoc = FD->getBodyResultTypeLoc().getSourceRange().Start;
       auto NameLoc = FD->getNameLoc();
       if (FuncLoc.isInvalid() || ReturnTyLoc.isInvalid() || NameLoc.isInvalid())
         break;

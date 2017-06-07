@@ -209,9 +209,6 @@ func testKeyPathSubscript(readonly: Z, writable: inout Z,
   readonly[keyPath: rkp] = sink
   writable[keyPath: rkp] = sink
 
-  // TODO: PartialKeyPath and AnyKeyPath application
-
-  /*
   let pkp: PartialKeyPath = rkp
 
   var anySink1 = readonly[keyPath: pkp]
@@ -219,8 +216,8 @@ func testKeyPathSubscript(readonly: Z, writable: inout Z,
   var anySink2 = writable[keyPath: pkp]
   expect(&anySink2, toHaveType: Exactly<Any>.self)
 
-  readonly[keyPath: pkp] = anySink1 // e/xpected-error{{cannot assign to immutable}}
-  writable[keyPath: pkp] = anySink2 // e/xpected-error{{cannot assign to immutable}}
+  readonly[keyPath: pkp] = anySink1 // expected-error{{cannot assign to immutable}}
+  writable[keyPath: pkp] = anySink2 // expected-error{{cannot assign to immutable}}
 
   let akp: AnyKeyPath = pkp
 
@@ -229,9 +226,60 @@ func testKeyPathSubscript(readonly: Z, writable: inout Z,
   var anyqSink2 = writable[keyPath: akp]
   expect(&anyqSink2, toHaveType: Exactly<Any?>.self)
 
-  readonly[keyPath: akp] = anyqSink1 // e/xpected-error{{cannot assign to immutable}}
-  writable[keyPath: akp] = anyqSink2 // e/xpected-error{{cannot assign to immutable}}
-  */
+  readonly[keyPath: akp] = anyqSink1 // expected-error{{cannot assign to immutable}}
+  writable[keyPath: akp] = anyqSink2 // expected-error{{cannot assign to immutable}}
+}
+
+struct ZwithSubscript {
+  subscript(keyPath kp: KeyPath<ZwithSubscript, Int>) -> Int { return 0 }
+  subscript(keyPath kp: WritableKeyPath<ZwithSubscript, Int>) -> Int { return 0 }
+  subscript(keyPath kp: ReferenceWritableKeyPath<ZwithSubscript, Int>) -> Int { return 0 }
+  subscript(keyPath kp: PartialKeyPath<ZwithSubscript>) -> Any { return 0 }
+}
+
+func testKeyPathSubscript(readonly: ZwithSubscript, writable: inout ZwithSubscript,
+                          kp: KeyPath<ZwithSubscript, Int>,
+                          wkp: WritableKeyPath<ZwithSubscript, Int>,
+                          rkp: ReferenceWritableKeyPath<ZwithSubscript, Int>) {
+  var sink: Int
+  sink = readonly[keyPath: kp]
+  sink = writable[keyPath: kp]
+  sink = readonly[keyPath: wkp]
+  sink = writable[keyPath: wkp]
+  sink = readonly[keyPath: rkp]
+  sink = writable[keyPath: rkp]
+
+  readonly[keyPath: kp] = sink // expected-error{{cannot assign through subscript: subscript is get-only}}
+  writable[keyPath: kp] = sink // expected-error{{cannot assign through subscript: subscript is get-only}}
+  readonly[keyPath: wkp] = sink // expected-error{{cannot assign through subscript: subscript is get-only}}
+  // FIXME: silently falls back to keypath application, which seems inconsistent
+  writable[keyPath: wkp] = sink
+  // FIXME: silently falls back to keypath application, which seems inconsistent
+  readonly[keyPath: rkp] = sink
+  // FIXME: silently falls back to keypath application, which seems inconsistent
+  writable[keyPath: rkp] = sink
+
+  let pkp: PartialKeyPath = rkp
+
+  var anySink1 = readonly[keyPath: pkp]
+  expect(&anySink1, toHaveType: Exactly<Any>.self)
+  var anySink2 = writable[keyPath: pkp]
+  expect(&anySink2, toHaveType: Exactly<Any>.self)
+
+  readonly[keyPath: pkp] = anySink1 // expected-error{{cannot assign through subscript: subscript is get-only}}
+  writable[keyPath: pkp] = anySink2 // expected-error{{cannot assign through subscript: subscript is get-only}}
+
+  let akp: AnyKeyPath = pkp
+
+  var anyqSink1 = readonly[keyPath: akp]
+  expect(&anyqSink1, toHaveType: Exactly<Any?>.self)
+  var anyqSink2 = writable[keyPath: akp]
+  expect(&anyqSink2, toHaveType: Exactly<Any?>.self)
+
+  // FIXME: silently falls back to keypath application, which seems inconsistent
+  readonly[keyPath: akp] = anyqSink1 // expected-error{{cannot assign to immutable}}
+  // FIXME: silently falls back to keypath application, which seems inconsistent
+  writable[keyPath: akp] = anyqSink2 // expected-error{{cannot assign to immutable}}
 }
 
 func testKeyPathSubscriptMetatype(readonly: Z.Type, writable: inout Z.Type,

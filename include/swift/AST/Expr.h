@@ -592,12 +592,12 @@ public:
   /// a base class.
   bool isSuperExpr() const;
 
-  /// Returns true if directly appending a parameter list would be syntactically
-  /// valid.
+  /// Returns false if this expression needs to be wrapped in parens when
+  /// used inside of a any postfix expression, true otherwise.
   ///
-  /// Good examples: foo.bar, baz().
-  /// Bad examples: 
-  bool canAppendCallParentheses() const;
+  /// \param appendingPostfixOperator if the expression being
+  /// appended is a postfix operator like '!' or '?'.
+  bool canAppendPostfixExpression(bool appendingPostfixOperator = false) const;
 
   /// Returns true if this is an infix operator of some sort, including
   /// a builtin operator.
@@ -3313,7 +3313,10 @@ public:
   }
 
   /// \brief Retrieve the result type of this closure.
-  Type getResultType() const;
+  Type getResultType(llvm::function_ref<Type(const Expr *)> getType =
+                         [](const Expr *E) -> Type {
+    return E->getType();
+  }) const;
 
   /// \brief Return whether this closure is throwing when fully applied.
   bool isBodyThrowing() const;

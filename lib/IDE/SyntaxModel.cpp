@@ -206,13 +206,6 @@ SyntaxModelContext::SyntaxModelContext(SourceFile &SrcFile)
         break;
       }
 
-      case tok::unknown:
-        if (Tok.getText().startswith("\"")) {
-          // invalid string literal
-          Kind = SyntaxNodeKind::String;
-          break;
-        }
-        continue;
       default:
         continue;
       }
@@ -1045,8 +1038,9 @@ public:
         return { true, E };
       if (DRE->getRefKind() != DeclRefKind::Ordinary)
         return { true, E };
+      // TODO: Handle special names
       if (!Fn(CharSourceRange(DRE->getSourceRange().Start,
-                              DRE->getName().getBaseName().getLength())))
+                              DRE->getName().getBaseIdentifier().getLength())))
         return { false, nullptr };
     }
     return { true, E };

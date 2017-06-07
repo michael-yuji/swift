@@ -243,6 +243,25 @@ namespace {
           // the field offset vector.
           ClassHasFixedSize = false;
 
+          // We can't use global offset variables if we are generic and layout
+          // dependent on a generic parameter because the objective-c layout might
+          // depend on the alignment of the generic stored property('t' in the
+          // example below).
+          //
+          // class Foo<T> : NSFoobar {
+          //   var x : AKlass = AKlass()
+          //   var y : AKlass = AKlass()
+          //   var t : T?
+          // }
+          if (classType.hasArchetype())
+            for (VarDecl *var : theClass->getStoredProperties()) {
+              SILType type = classType.getFieldType(var, IGM.getSILModule());
+              auto &eltType = IGM.getTypeInfo(type);
+              if (!eltType.isFixedSize()) {
+                if (type.hasArchetype())
+                  ClassHasConcreteLayout = false;
+              }
+            }
         } else if (IGM.isResilient(superclass, ResilienceExpansion::Maximal)) {
           ClassMetadataRequiresDynamicInitialization = true;
 
@@ -952,7 +971,7 @@ void IRGenModule::emitClassDecl(ClassDecl *D) {
                     classTI.getLayout(*this, selfType),
                     classTI.getClassLayout(*this, selfType));
 
-  IRGen.addClassForArchiveNameRegistration(D);
+  IRGen.addClassForEagerInitialization(D);
 
   emitNestedTypeDecls(D->getMembers());
   emitFieldMetadataRecord(D);

@@ -1,4 +1,4 @@
-// RUN: rm -rf %t && mkdir -p %t
+// RUN: %empty-directory(%t)
 // RUN: %target-build-swift %s -Xfrontend -enable-experimental-keypath-components -o %t/a.out
 // RUN: %target-run %t/a.out
 // REQUIRES: executable_test
@@ -274,6 +274,75 @@ keyPath.test("computed properties") {
     test[keyPath: tc_mutatingProtoExt] = TestComputed()
     expectTrue(oldTest.canary !== test.canary)
     expectTrue(test.canary === test[keyPath: tc_mutatingProtoExt].canary)
+  }
+}
+
+class AB {
+}
+class ABC: AB, ABCProtocol {
+  var a = LifetimeTracked(1)
+  var b = LifetimeTracked(2)
+  var c = LifetimeTracked(3)
+}
+
+protocol ABCProtocol {
+  var a: LifetimeTracked { get }
+  var b: LifetimeTracked { get set }
+  var c: LifetimeTracked { get nonmutating set }
+}
+
+keyPath.test("dynamically-typed application") {
+  let cPaths = [\ABC.a, \ABC.b, \ABC.c]
+
+  let subject = ABC()
+
+  do {
+    let fields = cPaths.map { subject[keyPath: $0] }
+    expectTrue(fields[0] as! AnyObject === subject.a)
+    expectTrue(fields[1] as! AnyObject === subject.b)
+    expectTrue(fields[2] as! AnyObject === subject.c)
+  }
+
+  let erasedSubject: AB = subject
+  let erasedPaths: [AnyKeyPath] = cPaths
+  let wrongSubject = AB()
+
+  do {
+    let fields = erasedPaths.map { erasedSubject[keyPath: $0] }
+    expectTrue(fields[0]! as! AnyObject === subject.a)
+    expectTrue(fields[1]! as! AnyObject === subject.b)
+    expectTrue(fields[2]! as! AnyObject === subject.c)
+
+    let wrongFields = erasedPaths.map { wrongSubject[keyPath: $0] }
+    expectTrue(wrongFields[0] == nil)
+    expectTrue(wrongFields[1] == nil)
+    expectTrue(wrongFields[2] == nil)
+  }
+
+  var protoErasedSubject: ABCProtocol = subject
+  let protoErasedPathA = \ABCProtocol.a
+  let protoErasedPathB = \ABCProtocol.b
+  let protoErasedPathC = \ABCProtocol.c
+
+  do {
+    expectTrue(protoErasedSubject.a ===
+                  protoErasedSubject[keyPath: protoErasedPathA])
+
+    let newB = LifetimeTracked(4)
+    expectTrue(protoErasedSubject.b ===
+                  protoErasedSubject[keyPath: protoErasedPathB])
+    protoErasedSubject[keyPath: protoErasedPathB] = newB
+    expectTrue(protoErasedSubject.b ===
+                  protoErasedSubject[keyPath: protoErasedPathB])
+    expectTrue(protoErasedSubject.b === newB)
+
+    let newC = LifetimeTracked(5)
+    expectTrue(protoErasedSubject.c ===
+                  protoErasedSubject[keyPath: protoErasedPathC])
+    protoErasedSubject[keyPath: protoErasedPathC] = newC
+    expectTrue(protoErasedSubject.c ===
+                  protoErasedSubject[keyPath: protoErasedPathC])
+    expectTrue(protoErasedSubject.c === newC)
   }
 }
 

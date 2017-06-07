@@ -2080,7 +2080,7 @@ ConstraintSystem::matchTypes(Type type1, Type type2, ConstraintKind kind,
                 // Favor an UnsafeMutablePointer-to-UnsafeMutablePointer
                 // conversion.
                 if (type1PointerKind != pointerKind)
-                  increaseScore(ScoreKind::SK_ScalarPointerConversion);
+                  increaseScore(ScoreKind::SK_ValueToPointerConversion);
                 conversionsOrFixes.push_back(
                   ConversionRestrictionKind::PointerToPointer);
               }
@@ -2088,7 +2088,7 @@ ConstraintSystem::matchTypes(Type type1, Type type2, ConstraintKind kind,
               else if (type1PointerKind == PTK_UnsafeMutableRawPointer &&
                        pointerKind == PTK_UnsafeRawPointer) {
                 if (type1PointerKind != pointerKind)
-                  increaseScore(ScoreKind::SK_ScalarPointerConversion);
+                  increaseScore(ScoreKind::SK_ValueToPointerConversion);
                 conversionsOrFixes.push_back(
                   ConversionRestrictionKind::PointerToPointer);              
               }
@@ -2407,7 +2407,9 @@ ConstraintSystem::simplifyConstructionConstraint(
   auto fnLocator = getConstraintLocator(locator,
                                         ConstraintLocator::ApplyFunction);
   auto tv = createTypeVariable(applyLocator,
-                               TVO_CanBindToLValue|TVO_PrefersSubtypeBinding);
+                               TVO_CanBindToLValue |
+                               TVO_CanBindToInOut |
+                               TVO_PrefersSubtypeBinding);
 
   // The constructor will have function type T -> T2, for a fresh type
   // variable T. T2 is the result type provided via the construction
@@ -2839,8 +2841,8 @@ performMemberLookup(ConstraintKind constraintKind, DeclName memberName,
     // Tuples don't have compound-name members.
     if (!memberName.isSimpleName())
       return result;  // No result.
-    
-    StringRef nameStr = memberName.getBaseName().str();
+
+    StringRef nameStr = memberName.getBaseIdentifier().str();
     int fieldIdx = -1;
     // Resolve a number reference into the tuple type.
     unsigned Value = 0;
@@ -2848,7 +2850,7 @@ performMemberLookup(ConstraintKind constraintKind, DeclName memberName,
         Value < baseTuple->getNumElements()) {
       fieldIdx = Value;
     } else {
-      fieldIdx = baseTuple->getNamedElementId(memberName.getBaseName());
+      fieldIdx = baseTuple->getNamedElementId(memberName.getBaseIdentifier());
     }
     
     if (fieldIdx == -1)
@@ -2955,7 +2957,7 @@ performMemberLookup(ConstraintKind constraintKind, DeclName memberName,
         return result.markErrorAlreadyDiagnosed();
 
       // FIXME: Deal with broken recursion
-      if (!ctor->getInterfaceType())
+      if (!ctor->hasInterfaceType())
         continue;
 
       // If the argument labels for this result are incompatible with
@@ -2978,8 +2980,8 @@ performMemberLookup(ConstraintKind constraintKind, DeclName memberName,
           }
         }
       }
-      
-      // If the invocation's argument expression has a favored constraint,
+
+      // If the invocation's argument expression has a favored type,
       // use that information to determine whether a specific overload for
       // the initializer should be favored.
       if (favoredType && result.FavoredChoice == ~0U) {
@@ -2994,7 +2996,8 @@ performMemberLookup(ConstraintKind constraintKind, DeclName memberName,
             argType = ctor.Decl->getInnermostDeclContext()
                 ->mapTypeIntoContext(argType);
             if (argType->isEqual(favoredType))
-              result.FavoredChoice = result.ViableCandidates.size();
+              if (!ctor->getAttrs().isUnavailable(getASTContext()))
+                result.FavoredChoice = result.ViableCandidates.size();
           }
         }
       }
@@ -3052,7 +3055,7 @@ performMemberLookup(ConstraintKind constraintKind, DeclName memberName,
     }
 
     // FIXME: Deal with broken recursion
-    if (!cand->getInterfaceType())
+    if (!cand->hasInterfaceType())
       return;
 
     // If the argument labels for this result are incompatible with
@@ -3239,7 +3242,11 @@ retry_after_fail:
         result.markErrorAlreadyDiagnosed();
         return result;
       }
-      
+
+      // FIXME: Deal with broken recursion
+      if (!cand->hasInterfaceType())
+        continue;
+
       result.addUnviable(cand, MemberLookupResult::UR_Inaccessible);
     }
   }
@@ -3933,13 +3940,21 @@ ConstraintSystem::simplifyKeyPathApplicationConstraint(
     return SolutionKind::Unsolved;
   };
   
+  if (auto clas = keyPathTy->getAs<NominalType>()) {
+    if (clas->getDecl() == getASTContext().getAnyKeyPathDecl()) {
+      // Read-only keypath, whose projected value is upcast to `Any?`.
+      // The root type can be anything.
+      Type resultTy = ProtocolCompositionType::get(getASTContext(), {},
+                                                  /*explicit AnyObject*/ false);
+      resultTy = OptionalType::get(resultTy);
+      return matchTypes(resultTy, valueTy, ConstraintKind::Bind,
+                        subflags, locator);
+    }
+  }
+  
   if (auto bgt = keyPathTy->getAs<BoundGenericType>()) {
-    if (bgt->getGenericArgs().size() < 2)
-      return SolutionKind::Error;
-
     // We have the key path type. Match it to the other ends of the constraint.
     auto kpRootTy = bgt->getGenericArgs()[0];
-    auto kpValueTy = bgt->getGenericArgs()[1];
     
     // Try to match the root type.
     rootTy = getFixedTypeRecursive(rootTy, flags, /*wantRValue=*/false);
@@ -3954,7 +3969,19 @@ ConstraintSystem::simplifyKeyPathApplicationConstraint(
     case SolutionKind::Unsolved:
       llvm_unreachable("should have generated constraints");
     }
-    
+
+    if (bgt->getDecl() == getASTContext().getPartialKeyPathDecl()) {
+      // Read-only keypath, whose projected value is upcast to `Any`.
+      auto resultTy = ProtocolCompositionType::get(getASTContext(), {},
+                                                  /*explicit AnyObject*/ false);
+      return matchTypes(resultTy, valueTy,
+                        ConstraintKind::Bind, subflags, locator);
+    }
+
+    if (bgt->getGenericArgs().size() < 2)
+      return SolutionKind::Error;
+    auto kpValueTy = bgt->getGenericArgs()[1];
+
     /// Solve for an rvalue base.
     auto solveRValue = [&]() -> ConstraintSystem::SolutionKind {
       return matchTypes(kpValueTy, valueTy,
@@ -3973,6 +4000,7 @@ ConstraintSystem::simplifyKeyPathApplicationConstraint(
       return matchTypes(LValueType::get(kpValueTy), valueTy,
                         ConstraintKind::Bind, subflags, locator);
     };
+
   
     if (bgt->getDecl() == getASTContext().getKeyPathDecl()) {
       // Read-only keypath.
@@ -4084,14 +4112,6 @@ retry:
           == SolutionKind::Error)
       return SolutionKind::Error;
 
-    // If our type constraints is for a FunctionType, move over the @noescape
-    // flag.
-    if (func1->isNoEscape() &&
-        !func2->isNoEscape() &&
-        func2->hasTypeVariable()) {
-      auto &extraExtInfo = extraFunctionAttrs[func2];
-      extraExtInfo = extraExtInfo.withNoEscape();
-    }
     return SolutionKind::Solved;
   }
 
@@ -4359,6 +4379,7 @@ ConstraintSystem::simplifyRestrictedConstraintImpl(
     auto baseType1 = getFixedTypeRecursive(*isArrayType(obj1), false, false);
     auto baseType2 = getBaseTypeForPointer(*this, t2);
 
+    increaseScore(ScoreKind::SK_ValueToPointerConversion);
     return matchTypes(baseType1, baseType2,
                       ConstraintKind::BindToPointerType,
                       subflags, locator);
@@ -4378,6 +4399,8 @@ ConstraintSystem::simplifyRestrictedConstraintImpl(
     // If we haven't resolved the element type, generate constraints.
     if (baseType2->isTypeVariableOrMember()) {
       if (flags.contains(TMF_GenerateConstraints)) {
+        increaseScore(ScoreKind::SK_ValueToPointerConversion);
+
         auto int8Con = Constraint::create(*this, ConstraintKind::Bind,
                                        baseType2, TC.getInt8Type(DC),
                                        getConstraintLocator(locator));
@@ -4399,6 +4422,8 @@ ConstraintSystem::simplifyRestrictedConstraintImpl(
     if (!isStringCompatiblePointerBaseType(TC, DC, baseType2)) {
       return SolutionKind::Error;
     }
+
+    increaseScore(ScoreKind::SK_ValueToPointerConversion);
     return SolutionKind::Solved;
   }
       
@@ -4413,6 +4438,7 @@ ConstraintSystem::simplifyRestrictedConstraintImpl(
     
     // Set up the disjunction for the array or scalar cases.
 
+    increaseScore(ScoreKind::SK_ValueToPointerConversion);
     return matchTypes(baseType1, baseType2,
                       ConstraintKind::BindToPointerType,
                       subflags, locator);
@@ -4514,7 +4540,9 @@ ConstraintSystem::simplifyRestrictedConstraintImpl(
       return SolutionKind::Error;
 
     auto constraintLocator = getConstraintLocator(locator);
-    auto tv = createTypeVariable(constraintLocator, TVO_PrefersSubtypeBinding);
+    auto tv = createTypeVariable(constraintLocator,
+                                 TVO_PrefersSubtypeBinding |
+                                 TVO_CanBindToInOut);
     
     addConstraint(ConstraintKind::ConformsTo, tv,
                   hashableProtocol->getDeclaredType(), constraintLocator);
@@ -4964,4 +4992,27 @@ ConstraintSystem::simplifyConstraint(const Constraint &constraint) {
   }
 
   llvm_unreachable("Unhandled ConstraintKind in switch.");
+}
+
+void ConstraintSystem::simplifyDisjunctionChoice(Constraint *choice) {
+  // Simplify this term in the disjunction.
+  switch (simplifyConstraint(*choice)) {
+  case ConstraintSystem::SolutionKind::Error:
+    if (!failedConstraint)
+      failedConstraint = choice;
+    solverState->retireConstraint(choice);
+    break;
+
+  case ConstraintSystem::SolutionKind::Solved:
+    solverState->retireConstraint(choice);
+    break;
+
+  case ConstraintSystem::SolutionKind::Unsolved:
+    InactiveConstraints.push_back(choice);
+    CG.addConstraint(choice);
+    break;
+  }
+
+  // Record this as a generated constraint.
+  solverState->addGeneratedConstraint(choice);
 }

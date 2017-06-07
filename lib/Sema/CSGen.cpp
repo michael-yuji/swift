@@ -58,11 +58,11 @@ findReferencedDecl(Expr *expr, DeclNameLoc &loc) {
 
 static bool isArithmeticOperatorDecl(ValueDecl *vd) {
   return vd && 
-  (vd->getName().str() == "+" ||
-   vd->getName().str() == "-" ||
-   vd->getName().str() == "*" ||
-   vd->getName().str() == "/" ||
-   vd->getName().str() == "%");
+  (vd->getBaseName() == "+" ||
+   vd->getBaseName() == "-" ||
+   vd->getBaseName() == "*" ||
+   vd->getBaseName() == "/" ||
+   vd->getBaseName() == "%");
 }
 
 static bool mergeRepresentativeEquivalenceClasses(ConstraintSystem &CS,
@@ -357,8 +357,7 @@ namespace {
         if (acp1 == acp2)
           continue;
 
-        if (acp1->getDecl()->getName().str() ==
-              acp2->getDecl()->getName().str()) {
+        if (acp1->getDecl()->getBaseName() == acp2->getDecl()->getBaseName()) {
 
           auto tyvar1 = CS.getType(acp1)->getAs<TypeVariableType>();
           auto tyvar2 = CS.getType(acp2)->getAs<TypeVariableType>();
@@ -439,8 +438,8 @@ namespace {
               if (!isArithmeticOperatorDecl(ODR1->getDecls()[0]))
                 return;
 
-              if (ODR1->getDecls()[0]->getName().str() != 
-                   ODR2->getDecls()[0]->getName().str())
+              if (ODR1->getDecls()[0]->getBaseName() !=
+                  ODR2->getDecls()[0]->getBaseName())
                 return;
 
               // All things equal, we can merge the tyvars for the function
@@ -997,7 +996,8 @@ namespace {
       auto baseTy = CS.getType(base);
       auto tv = CS.createTypeVariable(
                   CS.getConstraintLocator(expr, ConstraintLocator::Member),
-                  TVO_CanBindToLValue);
+                  TVO_CanBindToLValue |
+                  TVO_CanBindToInOut);
       CS.addValueMemberConstraint(baseTy, name, tv, CurDC, functionRefKind,
         CS.getConstraintLocator(expr, ConstraintLocator::Member));
       return tv;
@@ -1017,7 +1017,9 @@ namespace {
 
       auto memberLocator =
         CS.getConstraintLocator(expr, ConstraintLocator::Member);
-      auto tv = CS.createTypeVariable(memberLocator, TVO_CanBindToLValue);
+      auto tv = CS.createTypeVariable(memberLocator,
+                                      TVO_CanBindToLValue |
+                                      TVO_CanBindToInOut);
 
       OverloadChoice choice(CS.getType(base), decl, functionRefKind);
       auto locator = CS.getConstraintLocator(expr, ConstraintLocator::Member);
@@ -1043,7 +1045,7 @@ namespace {
       // I -> inout? O, where I and O are fresh type variables. The index
       // expression must be convertible to I and the subscript expression
       // itself has type inout? O, where O may or may not be an lvalue.
-      auto inputTv = CS.createTypeVariable(indexLocator, /*options=*/0);
+      auto inputTv = CS.createTypeVariable(indexLocator, TVO_CanBindToInOut);
       
       // For an integer subscript expression on an array slice type, instead of
       // introducing a new type variable we can easily obtain the element type.
@@ -1091,7 +1093,8 @@ namespace {
       
       if (outputTy.isNull()) {
         outputTy = CS.createTypeVariable(resultLocator,
-                                              TVO_CanBindToLValue);
+                                         TVO_CanBindToLValue |
+                                         TVO_CanBindToInOut);
       } else {
         // TODO: Generalize this for non-subscript-expr anchors, so that e.g.
         // keypath lookup benefits from the peephole as well.
@@ -1179,7 +1182,8 @@ namespace {
       
 
       auto tv = CS.createTypeVariable(CS.getConstraintLocator(expr),
-                                      TVO_PrefersSubtypeBinding);
+                                      TVO_PrefersSubtypeBinding |
+                                      TVO_CanBindToInOut);
       CS.addConstraint(ConstraintKind::LiteralConformsTo, tv,
                        protocol->getDeclaredType(),
                        CS.getConstraintLocator(expr));
@@ -1201,7 +1205,9 @@ namespace {
       // The type of the expression must conform to the
       // ExpressibleByStringInterpolation protocol.
       auto locator = CS.getConstraintLocator(expr);
-      auto tv = CS.createTypeVariable(locator, TVO_PrefersSubtypeBinding);
+      auto tv = CS.createTypeVariable(locator,
+                                      TVO_PrefersSubtypeBinding |
+                                      TVO_CanBindToInOut);
       CS.addConstraint(ConstraintKind::LiteralConformsTo, tv,
                        interpolationProto->getDeclaredType(),
                        locator);
@@ -1246,7 +1252,8 @@ namespace {
       }
 
       auto tv = CS.createTypeVariable(CS.getConstraintLocator(expr),
-                                      TVO_PrefersSubtypeBinding);
+                                      TVO_PrefersSubtypeBinding |
+                                      TVO_CanBindToInOut);
       
       CS.addConstraint(ConstraintKind::LiteralConformsTo, tv,
                        protocol->getDeclaredType(),
@@ -1290,7 +1297,8 @@ namespace {
         if (VD->hasInterfaceType() &&
             VD->getInterfaceType()->is<UnresolvedType>()) {
           return CS.createTypeVariable(CS.getConstraintLocator(E),
-                                       TVO_CanBindToLValue);
+                                       TVO_CanBindToLValue |
+                                       TVO_CanBindToInOut);
         }
       }
 
@@ -1309,7 +1317,9 @@ namespace {
       
       // Create an overload choice referencing this declaration and immediately
       // resolve it. This records the overload for use later.
-      auto tv = CS.createTypeVariable(locator, TVO_CanBindToLValue);
+      auto tv = CS.createTypeVariable(locator,
+                                      TVO_CanBindToLValue |
+                                      TVO_CanBindToInOut);
       CS.resolveOverload(locator, tv,
                          OverloadChoice(Type(), E->getDecl(),
                                         E->getFunctionRefKind()),
@@ -1375,7 +1385,9 @@ namespace {
       // that will be equal to different types depending on which overload
       // is selected.
       auto locator = CS.getConstraintLocator(expr);
-      auto tv = CS.createTypeVariable(locator, TVO_CanBindToLValue);
+      auto tv = CS.createTypeVariable(locator,
+                                      TVO_CanBindToLValue |
+                                      TVO_CanBindToInOut);
       ArrayRef<ValueDecl*> decls = expr->getDecls();
       SmallVector<OverloadChoice, 4> choices;
       
@@ -1405,7 +1417,8 @@ namespace {
       // to help us determine which declaration the user meant to refer to.
       // FIXME: Do we need to note that we're doing some kind of recovery?
       return CS.createTypeVariable(CS.getConstraintLocator(expr),
-                                   TVO_CanBindToLValue);
+                                   TVO_CanBindToLValue |
+                                   TVO_CanBindToInOut);
     }
     
     Type visitMemberRefExpr(MemberRefExpr *expr) {
@@ -1430,8 +1443,10 @@ namespace {
 
       auto memberLocator
         = CS.getConstraintLocator(expr, ConstraintLocator::UnresolvedMember);
-      auto baseTy = CS.createTypeVariable(baseLocator, /*options=*/0);
-      auto memberTy = CS.createTypeVariable(memberLocator, TVO_CanBindToLValue);
+      auto baseTy = CS.createTypeVariable(baseLocator, TVO_CanBindToInOut);
+      auto memberTy = CS.createTypeVariable(memberLocator,
+                                            TVO_CanBindToLValue |
+                                            TVO_CanBindToInOut);
 
       // An unresolved member expression '.member' is modeled as a value member
       // constraint
@@ -1453,7 +1468,7 @@ namespace {
         auto outputTy
           = CS.createTypeVariable(
               CS.getConstraintLocator(expr, ConstraintLocator::ApplyFunction),
-              /*options=*/0);
+              TVO_CanBindToInOut);
         CS.addConstraint(ConstraintKind::Conversion, outputTy, baseTy,
           CS.getConstraintLocator(expr, ConstraintLocator::RvalueAdjustment));
 
@@ -1472,7 +1487,9 @@ namespace {
       
       // The member type also needs to be convertible to the context type, which
       // preserves lvalue-ness.
-      auto resultTy = CS.createTypeVariable(memberLocator, TVO_CanBindToLValue);
+      auto resultTy = CS.createTypeVariable(memberLocator,
+                                            TVO_CanBindToLValue |
+                                            TVO_CanBindToInOut);
       CS.addConstraint(ConstraintKind::Conversion, memberTy, resultTy,
                        memberLocator);
       CS.addConstraint(ConstraintKind::Equal, resultTy, baseTy,
@@ -1498,9 +1515,11 @@ namespace {
 
         auto argsTy = CS.createTypeVariable(
                         CS.getConstraintLocator(expr),
-                        TVO_CanBindToLValue|TVO_PrefersSubtypeBinding);
+                          TVO_CanBindToLValue |
+                          TVO_PrefersSubtypeBinding |
+                          TVO_CanBindToInOut);
         auto resultTy = CS.createTypeVariable(CS.getConstraintLocator(expr),
-                                              /*options=*/0);
+                                              TVO_CanBindToInOut);
         auto methodTy = FunctionType::get(argsTy, resultTy);
         CS.addValueMemberConstraint(baseTy, expr->getName(),
           methodTy, CurDC, expr->getFunctionRefKind(),
@@ -1604,7 +1623,8 @@ namespace {
 
     Type visitOptionalTryExpr(OptionalTryExpr *expr) {
       auto valueTy = CS.createTypeVariable(CS.getConstraintLocator(expr),
-                                           TVO_PrefersSubtypeBinding);
+                                           TVO_PrefersSubtypeBinding |
+                                           TVO_CanBindToInOut);
 
       Type optTy = getOptionalType(expr->getSubExpr()->getLoc(), valueTy);
       if (!optTy)
@@ -1690,7 +1710,7 @@ namespace {
         unsigned index = 0;
         for (auto element : expr->getElements()) {
           CS.addConstraint(ConstraintKind::Conversion,
-                           element->getType(),
+                           CS.getType(element),
                            contextualArrayElementType,
                            CS.getConstraintLocator(expr,
                                                    LocatorPathElt::
@@ -1700,7 +1720,9 @@ namespace {
         return contextualArrayType;
       }
       
-      auto arrayTy = CS.createTypeVariable(locator, TVO_PrefersSubtypeBinding);
+      auto arrayTy = CS.createTypeVariable(locator,
+                                           TVO_PrefersSubtypeBinding |
+                                           TVO_CanBindToInOut);
 
       // The array must be an array literal type.
       CS.addConstraint(ConstraintKind::LiteralConformsTo, arrayTy,
@@ -1716,7 +1738,7 @@ namespace {
       unsigned index = 0;
       for (auto element : expr->getElements()) {
         CS.addConstraint(ConstraintKind::Conversion,
-                         element->getType(),
+                         CS.getType(element),
                          arrayElementTy,
                          CS.getConstraintLocator(
                            expr,
@@ -1796,7 +1818,8 @@ namespace {
       }
       
       auto dictionaryTy = CS.createTypeVariable(locator,
-                                                TVO_PrefersSubtypeBinding);
+                                                TVO_PrefersSubtypeBinding |
+                                                TVO_CanBindToInOut);
 
       // The dictionary must be a dictionary literal type.
       CS.addConstraint(ConstraintKind::LiteralConformsTo, dictionaryTy,
@@ -1931,7 +1954,7 @@ namespace {
 
         // Otherwise, create a fresh type variable.
         Type ty = CS.createTypeVariable(CS.getConstraintLocator(locator),
-                                        /*options=*/0);
+                                        TVO_CanBindToInOut);
         
         param->setType(ty);
         param->setInterfaceType(ty);
@@ -1958,7 +1981,7 @@ namespace {
       case PatternKind::Any:
         // For a pattern of unknown type, create a new type variable.
         return CS.createTypeVariable(CS.getConstraintLocator(locator),
-                                     /*options=*/0);
+                                     TVO_CanBindToInOut);
 
       case PatternKind::Named: {
         auto var = cast<NamedPattern>(pattern)->getDecl();
@@ -1979,9 +2002,9 @@ namespace {
         // This will avoid exponential typecheck behavior in the case of nested
         // array and dictionary literals.
         Type ty = haveBoundCollectionLiteral ?
-                    boundExpr->getType() :
+                    CS.getType(boundExpr) :
                     CS.createTypeVariable(CS.getConstraintLocator(locator),
-                                          /*options=*/0);
+                                          TVO_CanBindToInOut);
 
         // For weak variables, use Optional<T>.
         if (auto *OA = var->getAttrs().getAttribute<OwnershipAttr>())
@@ -2029,7 +2052,7 @@ namespace {
         // TODO: we could try harder here, e.g. for enum elements to provide the
         // enum type.
         return CS.createTypeVariable(CS.getConstraintLocator(locator),
-                                     /*options=*/0);
+                                     TVO_CanBindToInOut);
       }
 
       llvm_unreachable("Unhandled pattern kind");
@@ -2037,7 +2060,7 @@ namespace {
 
     Type visitCaptureListExpr(CaptureListExpr *expr) {
       // The type of the capture list is just the type of its closure.
-      return expr->getClosureBody()->getType();
+      return CS.getType(expr->getClosureBody());
     }
 
     /// \brief Walk a closure body to determine if it's possible for
@@ -2265,7 +2288,7 @@ namespace {
 
         // If no return type was specified, create a fresh type
         // variable for it.
-        funcTy = CS.createTypeVariable(locator, /*options=*/0);
+        funcTy = CS.createTypeVariable(locator, TVO_CanBindToInOut);
 
         // Allow it to default to () if there are no return statements.
         if (closureHasNoResult(expr)) {
@@ -2308,7 +2331,7 @@ namespace {
       //
       // where T is a fresh type variable.
       auto lvalue = CS.createTypeVariable(CS.getConstraintLocator(expr),
-                                          /*options=*/0);
+                                          TVO_CanBindToInOut);
       auto bound = LValueType::get(lvalue);
       auto result = InOutType::get(lvalue);
       CS.addConstraint(ConstraintKind::Conversion,
@@ -2319,7 +2342,7 @@ namespace {
 
     Type visitDynamicTypeExpr(DynamicTypeExpr *expr) {
       auto tv = CS.createTypeVariable(CS.getConstraintLocator(expr),
-                                      /*options=*/0);
+                                      TVO_CanBindToInOut);
       CS.addConstraint(ConstraintKind::DynamicTypeOf, tv,
                        CS.getType(expr->getBase()),
            CS.getConstraintLocator(expr, ConstraintLocator::RvalueAdjustment));
@@ -2392,7 +2415,7 @@ namespace {
         outputTy = CS.createTypeVariable(
                      CS.getConstraintLocator(expr,
                                              ConstraintLocator::ApplyFunction),
-                                             /*options=*/0);
+                                             TVO_CanBindToInOut);
       } else {
         // Since we know what the output type is, we can set it as the favored
         // type of this expression.
@@ -2466,7 +2489,8 @@ namespace {
 
       // The branches must be convertible to a common type.
       auto resultTy = CS.createTypeVariable(CS.getConstraintLocator(expr),
-                                            TVO_PrefersSubtypeBinding);
+                                            TVO_PrefersSubtypeBinding |
+                                            TVO_CanBindToInOut);
       CS.addConstraint(ConstraintKind::Conversion,
                        CS.getType(expr->getThenExpr()), resultTy,
                        CS.getConstraintLocator(expr->getThenExpr()));
@@ -2591,9 +2615,9 @@ namespace {
       auto destTy = CS.computeAssignDestType(expr->getDest(), expr->getLoc());
       if (!destTy)
         return Type();
-      if (destTy->getRValueType()->is<UnresolvedType>()) {
+      if (destTy->is<UnresolvedType>()) {
         return CS.createTypeVariable(CS.getConstraintLocator(expr),
-                                     TVO_CanBindToLValue);
+                                     /*options=*/0);
       }
       
       // The source must be convertible to the destination.
@@ -2611,7 +2635,9 @@ namespace {
       // just plop an open type variable here.
       
       auto locator = CS.getConstraintLocator(expr);
-      auto typeVar = CS.createTypeVariable(locator, TVO_CanBindToLValue);
+      auto typeVar = CS.createTypeVariable(locator,
+                                           TVO_CanBindToLValue |
+                                           TVO_CanBindToInOut);
       return typeVar;
     }
 
@@ -2633,8 +2659,9 @@ namespace {
       auto locator = CS.getConstraintLocator(expr);
 
       auto objectTy = CS.createTypeVariable(locator,
-                                            TVO_PrefersSubtypeBinding
-                                            | TVO_CanBindToLValue);
+                                            TVO_PrefersSubtypeBinding |
+                                            TVO_CanBindToLValue |
+                                            TVO_CanBindToInOut);
       
       // The result is the object type of the optional subexpression.
       CS.addConstraint(ConstraintKind::OptionalObject,
@@ -2649,7 +2676,8 @@ namespace {
       // optional types, e.g. T? over T??; otherwise we don't really
       // have a preference.
       auto valueTy = CS.createTypeVariable(CS.getConstraintLocator(expr),
-                                           TVO_PrefersSubtypeBinding);
+                                           TVO_PrefersSubtypeBinding |
+                                           TVO_CanBindToInOut);
 
       Type optTy = getOptionalType(expr->getSubExpr()->getLoc(), valueTy);
       if (!optTy)
@@ -2666,8 +2694,9 @@ namespace {
       auto locator = CS.getConstraintLocator(expr);
 
       auto objectTy = CS.createTypeVariable(locator,
-                                            TVO_PrefersSubtypeBinding
-                                            | TVO_CanBindToLValue);
+                                            TVO_PrefersSubtypeBinding |
+                                            TVO_CanBindToLValue |
+                                            TVO_CanBindToInOut);
       
       // The result is the object type of the optional subexpression.
       CS.addConstraint(ConstraintKind::OptionalObject,
@@ -2700,7 +2729,7 @@ namespace {
         auto &placeholderTy
           = editorPlaceholderVariables[currentEditorPlaceholderVariable];
         if (!placeholderTy) {
-          placeholderTy = CS.createTypeVariable(locator, /*options*/0);
+          placeholderTy = CS.createTypeVariable(locator, TVO_CanBindToInOut);
 
           CS.addConstraint(ConstraintKind::Defaultable,
                            placeholderTy,
@@ -2744,7 +2773,7 @@ namespace {
 
     Type visitKeyPathExpr(KeyPathExpr *E) {
       if (E->isObjC())
-        return E->getObjCStringLiteralExpr()->getType();
+        return CS.getType(E->getObjCStringLiteralExpr());
       
       auto kpDecl = CS.getASTContext().getKeyPathDecl();
       
@@ -2756,7 +2785,7 @@ namespace {
       // For native key paths, traverse the key path components to set up
       // appropriate type relationships at each level.
       auto locator = CS.getConstraintLocator(E);
-      Type root = CS.createTypeVariable(locator, 0);
+      Type root = CS.createTypeVariable(locator, TVO_CanBindToInOut);
       
       // If a root type was explicitly given, then resolve it now.
       if (auto rootRepr = E->getRootType()) {
@@ -2792,7 +2821,9 @@ namespace {
           break;
         
         case KeyPathExpr::Component::Kind::UnresolvedProperty: {
-          auto memberTy = CS.createTypeVariable(locator, TVO_CanBindToLValue);
+          auto memberTy = CS.createTypeVariable(locator,
+                                                TVO_CanBindToLValue |
+                                                TVO_CanBindToInOut);
           auto refKind = component.getUnresolvedDeclName().isSimpleName()
             ? FunctionRefKind::Unapplied
             : FunctionRefKind::Compound;
@@ -2826,14 +2857,15 @@ namespace {
           
           // We can't assign an optional back through an optional chain
           // today. Force the base to an rvalue.
-          auto rvalueTy = CS.createTypeVariable(locator, 0);
+          auto rvalueTy = CS.createTypeVariable(locator, TVO_CanBindToInOut);
           CS.addConstraint(ConstraintKind::Equal, base, rvalueTy, locator);
           base = rvalueTy;
           LLVM_FALLTHROUGH;
         }
         case KeyPathExpr::Component::Kind::OptionalForce: {
           auto optionalObjTy = CS.createTypeVariable(locator,
-                                                     TVO_CanBindToLValue);
+                                                     TVO_CanBindToLValue |
+                                                     TVO_CanBindToInOut);
           
           CS.addConstraint(ConstraintKind::OptionalObject, base, optionalObjTy,
                            locator);
@@ -2852,14 +2884,14 @@ namespace {
       // If there was an optional chaining component, the end result must be
       // optional.
       if (didOptionalChain) {
-        auto objTy = CS.createTypeVariable(locator, 0);
+        auto objTy = CS.createTypeVariable(locator, TVO_CanBindToInOut);
         auto optTy = OptionalType::get(objTy);
         CS.addConstraint(ConstraintKind::Conversion, base, optTy,
                          locator);
         base = optTy;
       }
       
-      auto rvalueBase = CS.createTypeVariable(locator, 0);
+      auto rvalueBase = CS.createTypeVariable(locator, TVO_CanBindToInOut);
       CS.addConstraint(ConstraintKind::Equal, base, rvalueBase, locator);
       
       // The result is a KeyPath from the root to the end component.
@@ -2870,7 +2902,8 @@ namespace {
       } else {
         // The type of key path depends on the overloads chosen for the key
         // path components.
-        kpTy = CS.createTypeVariable(CS.getConstraintLocator(E), 0);
+        kpTy = CS.createTypeVariable(CS.getConstraintLocator(E),
+                                     TVO_CanBindToInOut);
         CS.addKeyPathConstraint(kpTy, root, rvalueBase,
                                 CS.getConstraintLocator(E));
       }
@@ -3192,7 +3225,8 @@ class InferUnresolvedMemberConstraintGenerator : public ConstraintGenerator {
   TypeVariableType *createFreeTypeVariableType(Expr *E) {
     auto &CS = getConstraintSystem();
     return CS.createTypeVariable(CS.getConstraintLocator(nullptr),
-                                      TypeVariableOptions::TVO_CanBindToLValue);
+                                 TVO_CanBindToLValue |
+                                 TVO_CanBindToInOut);
   }
 
 public:
@@ -3455,7 +3489,9 @@ swift::resolveValueMember(DeclContext &DC, Type BaseTy, DeclName Name) {
 
   // Try to figure out the best overload.
   ConstraintLocator *Locator = CS.getConstraintLocator(nullptr);
-  TypeVariableType *TV = CS.createTypeVariable(Locator, TVO_CanBindToLValue);
+  TypeVariableType *TV = CS.createTypeVariable(Locator,
+                                               TVO_CanBindToLValue |
+                                               TVO_CanBindToInOut);
   CS.addOverloadSet(TV, LookupResult.ViableCandidates, &DC, Locator);
   Optional<Solution> OpSolution = CS.solveSingle();
   ValueDecl *Selected = nullptr;

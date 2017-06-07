@@ -642,8 +642,10 @@ namespace {
     void printAbstractTypeParamCommon(AbstractTypeParamDecl *decl,
                                       const char *name) {
       printCommon(decl, name);
-      if (auto superclassTy = decl->getSuperclass()) {
-        OS << " superclass='" << superclassTy->getString() << "'";
+      if (decl->getDeclContext()->getGenericEnvironmentOfContext()) {
+        if (auto superclassTy = decl->getSuperclass()) {
+          OS << " superclass='" << superclassTy->getString() << "'";
+        }
       }
     }
 
@@ -1821,7 +1823,7 @@ public:
   }
   void visitOverloadedDeclRefExpr(OverloadedDeclRefExpr *E) {
     printCommon(E, "overloaded_decl_ref_expr")
-      << " name=" << E->getDecls()[0]->getName()
+      << " name=" << E->getDecls()[0]->getBaseName()
       << " #decls=" << E->getDecls().size()
       << " function_ref=" << getFunctionRefKindStr(E->getFunctionRefKind());
 

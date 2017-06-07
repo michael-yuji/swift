@@ -70,18 +70,14 @@ void ConstraintSystem::increaseScore(ScoreKind kind, unsigned value) {
     case SK_ValueToOptional:
       log << "value to optional";
       break;
-
-    case SK_ArrayPointerConversion:
-      log << "array-to-pointer conversion";
-      break;
-    case SK_ScalarPointerConversion:
-      log << "scalar-to-pointer conversion";
-      break;
     case SK_EmptyExistentialConversion:
       log << "empty-existential conversion";
       break;
     case SK_KeyPathSubscript:
       log << "key path subscript";
+      break;
+    case SK_ValueToPointerConversion:
+      log << "value-to-pointer conversion";
       break;
     }
     log << ")\n";
@@ -1014,8 +1010,8 @@ ConstraintSystem::compareSolutions(ConstraintSystem &cs,
 
     // FIXME: Lousy hack for ?? to prefer the catamorphism (flattening)
     // over the mplus (non-flattening) overload if all else is equal.
-    if (decl1->getName().str() == "??") {
-      assert(decl2->getName().str() == "??");
+    if (decl1->getBaseName() == "??") {
+      assert(decl2->getBaseName() == "??");
 
       auto check = [](const ValueDecl *VD) -> bool {
         if (!VD->getModuleContext()->isStdlibModule())

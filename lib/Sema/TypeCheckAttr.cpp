@@ -86,6 +86,7 @@ public:
   IGNORED_ATTR(ObjC)
   IGNORED_ATTR(ObjCBridged)
   IGNORED_ATTR(ObjCNonLazyRealization)
+  IGNORED_ATTR(ObjCRuntimeName)
   IGNORED_ATTR(Optional)
   IGNORED_ATTR(Postfix)
   IGNORED_ATTR(Prefix)
@@ -104,9 +105,7 @@ public:
   IGNORED_ATTR(ShowInInterface)
   IGNORED_ATTR(DiscardableResult)
   IGNORED_ATTR(Implements)
-  IGNORED_ATTR(NSKeyedArchiverClassName)
   IGNORED_ATTR(StaticInitializeObjCMetadata)
-  IGNORED_ATTR(NSKeyedArchiverEncodeNonGenericSubclassesOnly)
   IGNORED_ATTR(DowngradeExhaustivityCheck)
 #undef IGNORED_ATTR
 
@@ -769,6 +768,7 @@ public:
     IGNORED_ATTR(ObjC)
     IGNORED_ATTR(ObjCBridged)
     IGNORED_ATTR(ObjCNonLazyRealization)
+    IGNORED_ATTR(ObjCRuntimeName)
     IGNORED_ATTR(Optional)
     IGNORED_ATTR(Ownership)
     IGNORED_ATTR(Override)
@@ -784,7 +784,6 @@ public:
     IGNORED_ATTR(ShowInInterface)
     IGNORED_ATTR(ObjCMembers)
     IGNORED_ATTR(StaticInitializeObjCMetadata)
-    IGNORED_ATTR(NSKeyedArchiverEncodeNonGenericSubclassesOnly)
     IGNORED_ATTR(DowngradeExhaustivityCheck)
 #undef IGNORED_ATTR
 
@@ -827,7 +826,6 @@ public:
   
   void visitDiscardableResultAttr(DiscardableResultAttr *attr);
   void visitImplementsAttr(ImplementsAttr *attr);
-  void visitNSKeyedArchiverClassNameAttr(NSKeyedArchiverClassNameAttr *attr);
 };
 } // end anonymous namespace
 
@@ -1837,7 +1835,7 @@ void AttributeChecker::visitFixedLayoutAttr(FixedLayoutAttr *attr) {
   if (VD->getEffectiveAccess() < Accessibility::Public) {
     TC.diagnose(attr->getLocation(),
                 diag::fixed_layout_attr_on_internal_type,
-                VD->getName(),
+                VD->getBaseName(),
                 getAccessForDiagnostics(VD))
         .fixItRemove(attr->getRangeWithAt());
     attr->setInvalid();
@@ -1861,7 +1859,7 @@ void AttributeChecker::visitVersionedAttr(VersionedAttr *attr) {
   if (VD->getFormalAccess() != Accessibility::Internal) {
     TC.diagnose(attr->getLocation(),
                 diag::versioned_attr_with_explicit_accessibility,
-                VD->getName(),
+                VD->getBaseName(),
                 VD->getFormalAccess())
         .fixItRemove(attr->getRangeWithAt());
     attr->setInvalid();
@@ -1893,7 +1891,7 @@ void AttributeChecker::visitInlineableAttr(InlineableAttr *attr) {
        VD->getFormalAccess() < Accessibility::Public)) {
     TC.diagnose(attr->getLocation(),
                 diag::inlineable_decl_not_public,
-                VD->getName(),
+                VD->getBaseName(),
                 getAccessForDiagnostics(VD))
         .fixItRemove(attr->getRangeWithAt());
     attr->setInvalid();
@@ -1958,18 +1956,6 @@ void AttributeChecker::visitImplementsAttr(ImplementsAttr *attr) {
     TC.diagnose(attr->getLocation(),
                 diag::implements_attr_non_protocol_type)
       .highlight(ProtoTypeLoc.getTypeRepr()->getSourceRange());
-  }
-}
-
-void AttributeChecker::visitNSKeyedArchiverClassNameAttr(
-                                              NSKeyedArchiverClassNameAttr *attr) {
-  auto classDecl = dyn_cast<ClassDecl>(D);
-  if (!classDecl) return;
-
-  // Generic classes can't use @NSKeyedArchiverClassName.
-  if (classDecl->getGenericSignatureOfContext()) {
-    diagnoseAndRemoveAttr(attr, diag::attr_NSKeyedArchiverClassName_generic,
-                          classDecl->getDeclaredInterfaceType());
   }
 }
 

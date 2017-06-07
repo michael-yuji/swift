@@ -31,6 +31,10 @@ extension P {
   var z: String {
     return y
   }
+  var w: String {
+    get { return "" }
+    nonmutating set { }
+  }
 }
 
 // CHECK-LABEL: sil hidden @{{.*}}storedProperties
@@ -160,4 +164,21 @@ func keyPathsWithSpecificGenericInstance() {
   // CHECK-SAME:   getter @_T08keypaths1PPAAE1zSSvAA8ConcreteVTK : $@convention(thin) (@in Concrete) -> @out String
   _ = \Concrete.z
   _ = \S<Concrete>.computed
+}
+
+class AA<T> {
+  var a: Int { get { return 0 } set { } }
+}
+class BB<U, V>: AA<V> {
+}
+
+func keyPathForInheritedMember() {
+  _ = \BB<Int, String>.a
+}
+
+func keyPathForExistentialMember() {
+  _ = \P.x
+  _ = \P.y
+  _ = \P.z
+  _ = \P.w
 }

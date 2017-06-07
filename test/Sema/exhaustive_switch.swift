@@ -6,6 +6,19 @@ func foo(a: Int?, b: Int?) -> Int {
   case (_, .none): return 2
   case (.some(_), .some(_)): return 3
   }
+    
+  switch (a, b) {
+  case (.none, _): return 1
+  case (_, .none): return 2
+  case (_?, _?): return 3
+  }
+  
+  switch Optional<(Int?, Int?)>.some((a, b)) {
+  case .none: return 1
+  case let (_, x?)?: return x
+  case let (x?, _)?: return x
+  case (.none, .none)?: return 0
+  }
 }
 
 func bar(a: Bool, b: Bool) -> Int {
@@ -46,6 +59,15 @@ func foo() {
     ()
   case (_, .B(_)):
     ()
+  }
+  
+  switch (Foo.A(1), Optional<(Int, Int)>.some((0, 0))) {
+  case (.A(_), _):
+    break
+  case (.B(_), (let q, _)?):
+    print(q)
+  case (.B(_), nil):
+    break
   }
 }
 
@@ -329,7 +351,7 @@ func checkDiagnosticMinimality(x: Runcible?) {
   case (.hat, .spoon):
     break
   }
-  
+
   switch (x!, x!) { // expected-error {{switch must be exhaustive}}
   // expected-note@-1 {{add missing case: '(.fork, _)'}}
   // expected-note@-2 {{add missing case: '(.hat, .spoon)'}}
@@ -341,5 +363,160 @@ func checkDiagnosticMinimality(x: Runcible?) {
     break
   case (.hat, .hat):
     break
+  }
+}
+
+enum LargeSpaceEnum {
+  case case0
+  case case1
+  case case2
+  case case3
+  case case4
+  case case5
+  case case6
+  case case7
+  case case8
+  case case9
+  case case10
+}
+
+func notQuiteBigEnough() -> Bool {
+  switch (LargeSpaceEnum.case1, LargeSpaceEnum.case2) { // expected-error {{switch must be exhaustive}}
+  // expected-note@-1 110 {{add missing case:}}
+  case (.case0, .case0): return true
+  case (.case1, .case1): return true
+  case (.case2, .case2): return true
+  case (.case3, .case3): return true
+  case (.case4, .case4): return true
+  case (.case5, .case5): return true
+  case (.case6, .case6): return true
+  case (.case7, .case7): return true
+  case (.case8, .case8): return true
+  case (.case9, .case9): return true
+  case (.case10, .case10): return true
+  }
+}
+
+enum OverlyLargeSpaceEnum {
+  case case0
+  case case1
+  case case2
+  case case3
+  case case4
+  case case5
+  case case6
+  case case7
+  case case8
+  case case9
+  case case10
+  case case11
+}
+
+func quiteBigEnough() -> Bool {
+  switch (OverlyLargeSpaceEnum.case1, OverlyLargeSpaceEnum.case2) { // expected-error {{switch must be exhaustive}}
+  // expected-note@-1 {{do you want to add a default clause?}}
+  case (.case0, .case0): return true
+  case (.case1, .case1): return true
+  case (.case2, .case2): return true
+  case (.case3, .case3): return true
+  case (.case4, .case4): return true
+  case (.case5, .case5): return true
+  case (.case6, .case6): return true
+  case (.case7, .case7): return true
+  case (.case8, .case8): return true
+  case (.case9, .case9): return true
+  case (.case10, .case10): return true
+  case (.case11, .case11): return true
+  }
+
+  // No diagnostic
+  switch (OverlyLargeSpaceEnum.case1, OverlyLargeSpaceEnum.case2) { // expected-error {{switch must be exhaustive}}
+  // expected-note@-1 {{do you want to add a default clause?}}
+  case (.case0, _): return true
+  case (.case1, _): return true
+  case (.case2, _): return true
+  case (.case3, _): return true
+  case (.case4, _): return true
+  case (.case5, _): return true
+  case (.case6, _): return true
+  case (.case7, _): return true
+  case (.case8, _): return true
+  case (.case9, _): return true
+  case (.case10, _): return true
+  }
+
+
+  // No diagnostic
+  switch (OverlyLargeSpaceEnum.case1, OverlyLargeSpaceEnum.case2) {
+  case (.case0, _): return true
+  case (.case1, _): return true
+  case (.case2, _): return true
+  case (.case3, _): return true
+  case (.case4, _): return true
+  case (.case5, _): return true
+  case (.case6, _): return true
+  case (.case7, _): return true
+  case (.case8, _): return true
+  case (.case9, _): return true
+  case (.case10, _): return true
+  case (.case11, _): return true
+  }
+
+  // No diagnostic
+  switch (OverlyLargeSpaceEnum.case1, OverlyLargeSpaceEnum.case2) {
+  case (_, .case0): return true
+  case (_, .case1): return true
+  case (_, .case2): return true
+  case (_, .case3): return true
+  case (_, .case4): return true
+  case (_, .case5): return true
+  case (_, .case6): return true
+  case (_, .case7): return true
+  case (_, .case8): return true
+  case (_, .case9): return true
+  case (_, .case10): return true
+  case (_, .case11): return true
+  }
+
+  // No diagnostic
+  switch (OverlyLargeSpaceEnum.case1, OverlyLargeSpaceEnum.case2) {
+  case (_, _): return true
+  }
+
+  // No diagnostic
+  switch (OverlyLargeSpaceEnum.case1, OverlyLargeSpaceEnum.case2) {
+  case (.case0, .case0): return true
+  case (.case1, .case1): return true
+  case (.case2, .case2): return true
+  case (.case3, .case3): return true
+  case _: return true
+  }
+}
+
+indirect enum InfinitelySized {
+  case one
+  case two
+  case recur(InfinitelySized)
+  case mutualRecur(MutuallyRecursive, InfinitelySized)
+}
+
+indirect enum MutuallyRecursive {
+  case one
+  case two
+  case recur(MutuallyRecursive)
+  case mutualRecur(InfinitelySized, MutuallyRecursive)
+}
+
+func infinitelySized() -> Bool {
+  switch (InfinitelySized.one, InfinitelySized.one) { // expected-error {{switch must be exhaustive}}
+  // expected-note@-1 10 {{add missing case:}}
+  case (.one, .one): return true
+  case (.two, .two): return true
+  }
+  
+  switch (MutuallyRecursive.one, MutuallyRecursive.one) { // expected-error {{switch must be exhaustive}}
+  // expected-note@-1 10 {{add missing case:}}
+  case (.one, .one): return true
+  case (.two, .two): return true
   }
 }

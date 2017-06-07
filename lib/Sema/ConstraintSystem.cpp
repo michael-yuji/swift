@@ -712,30 +712,53 @@ void ConstraintSystem::recordOpenedTypes(
 
 /// Determine how many levels of argument labels should be removed from the
 /// function type when referencing the given declaration.
-static unsigned getNumRemovedArgumentLabels(ASTContext &ctx, ValueDecl *decl,
+static unsigned getNumRemovedArgumentLabels(TypeChecker &TC, ValueDecl *decl,
                                             bool isCurriedInstanceReference,
                                             FunctionRefKind functionRefKind) {
+  unsigned numParameterLists = 0;
+
+  // Enum element with associated value has to be treated
+  // as regular function value and all of the labels have to be
+  // stripped from its parameters.
+  //
+  // enum E {
+  //   case foo(a: Int)
+  // }
+  // let bar: [Int] = []
+  // bar.map(E.foo)
+  //
+  // `E.foo` has to act as a regular function type passed as a value.
+  if (!TC.getLangOpts().isSwiftVersion3()) {
+    if (auto *EED = dyn_cast<EnumElementDecl>(decl)) {
+      numParameterLists = EED->hasAssociatedValues() ? 2 : 1;
+    }
+  }
+
   // Only applicable to functions. Nothing else should have argument labels in
   // the type.
-  auto func = dyn_cast<AbstractFunctionDecl>(decl);
-  if (!func) return 0;
+  if (auto func = dyn_cast<AbstractFunctionDecl>(decl))
+    numParameterLists = func->getNumParameterLists();
+
+  if (numParameterLists == 0)
+    return 0;
 
   switch (functionRefKind) {
   case FunctionRefKind::Unapplied:
   case FunctionRefKind::Compound:
     // Always remove argument labels from unapplied references and references
     // that use a compound name.
-    return func->getNumParameterLists();
+    return numParameterLists;
 
   case FunctionRefKind::SingleApply:
     // If we have fewer than two parameter lists, leave the labels.
-    if (func->getNumParameterLists() < 2) return 0;
+    if (numParameterLists < 2)
+      return 0;
 
     // If this is a curried reference to an instance method, where 'self' is
     // being applied, e.g., "ClassName.instanceMethod(self)", remove the
     // argument labels from the resulting function type. The 'self' parameter is
     // always unlabeled, so this operation is a no-op for the actual application.
-    return isCurriedInstanceReference ? func->getNumParameterLists() : 1;
+    return isCurriedInstanceReference ? numParameterLists : 1;
 
   case FunctionRefKind::DoubleApply:
     // Never remove argument labels from a double application.
@@ -796,7 +819,7 @@ ConstraintSystem::getTypeOfReference(ValueDecl *value,
     auto openedType =
       openFunctionType(
         funcType,
-        getNumRemovedArgumentLabels(TC.Context, funcDecl,
+        getNumRemovedArgumentLabels(TC, funcDecl,
                                     /*isCurriedInstanceReference=*/false,
                                     functionRefKind),
         locator, replacements,
@@ -848,7 +871,8 @@ ConstraintSystem::getTypeOfReference(ValueDecl *value,
     if (param->isLet() && valueType->is<TypeVariableType>()) {
       Type paramType = valueType;
       valueType = createTypeVariable(getConstraintLocator(locator),
-                                     TVO_CanBindToLValue);
+                                     TVO_CanBindToLValue |
+                                     TVO_CanBindToInOut);
       addConstraint(ConstraintKind::BindParam, paramType, valueType,
                     getConstraintLocator(locator));
     }
@@ -950,8 +974,7 @@ void ConstraintSystem::openGeneric(
           locator.withPathElement(LocatorPathElt(archetype)));
 
     auto typeVar = createTypeVariable(locatorPtr,
-                                      TVO_PrefersSubtypeBinding |
-                                      TVO_MustBeMaterializable);
+                                      TVO_PrefersSubtypeBinding);
     auto result = replacements.insert(
       std::make_pair(cast<GenericTypeParamType>(gp->getCanonicalType()),
                      typeVar));
@@ -1113,7 +1136,7 @@ ConstraintSystem::getTypeOfMemberReference(
   auto &replacements = replacementsPtr ? *replacementsPtr : localReplacements;
   bool isCurriedInstanceReference = value->isInstanceMember() && !isInstance;
   unsigned numRemovedArgumentLabels =
-    getNumRemovedArgumentLabels(TC.Context, value, isCurriedInstanceReference,
+    getNumRemovedArgumentLabels(TC, value, isCurriedInstanceReference,
                                 functionRefKind);
 
   AnyFunctionType *funcType;
@@ -1291,7 +1314,11 @@ void ConstraintSystem::addOverloadSet(Type boundType,
                                        *favoredChoice,
                                        useDC,
                                        locator);
-    
+
+    assert((!favoredChoice->isDecl() ||
+            !favoredChoice->getDecl()->getAttrs().isUnavailable(
+                getASTContext())) &&
+           "Cannot make unavailable decl favored!");
     bindOverloadConstraint->setFavored();
     
     overloads.push_back(bindOverloadConstraint);
@@ -1330,9 +1357,11 @@ resolveOverloadForDeclWithSpecialTypeCheckingSemantics(ConstraintSystem &CS,
     // existentials (as seen from the current abstraction level), which can't
     // be expressed in the type system currently.
     auto input = CS.createTypeVariable(
-      CS.getConstraintLocator(locator, ConstraintLocator::FunctionArgument), 0);
+      CS.getConstraintLocator(locator, ConstraintLocator::FunctionArgument),
+      TVO_CanBindToInOut);
     auto output = CS.createTypeVariable(
-      CS.getConstraintLocator(locator, ConstraintLocator::FunctionResult), 0);
+      CS.getConstraintLocator(locator, ConstraintLocator::FunctionResult),
+      TVO_CanBindToInOut);
     
     auto inputArg = TupleTypeElt(input, CS.getASTContext().getIdentifier("of"));
     auto inputTuple = TupleType::get(inputArg, CS.getASTContext());
@@ -1348,14 +1377,17 @@ resolveOverloadForDeclWithSpecialTypeCheckingSemantics(ConstraintSystem &CS,
     // receives a copy of the argument closure that is temporarily made
     // @escaping.
     auto noescapeClosure = CS.createTypeVariable(
-      CS.getConstraintLocator(locator, ConstraintLocator::FunctionArgument), 0);
+      CS.getConstraintLocator(locator, ConstraintLocator::FunctionArgument),
+      TVO_CanBindToInOut);
     auto escapeClosure = CS.createTypeVariable(
-      CS.getConstraintLocator(locator, ConstraintLocator::FunctionArgument), 0);
+      CS.getConstraintLocator(locator, ConstraintLocator::FunctionArgument),
+      TVO_CanBindToInOut);
     CS.addConstraint(ConstraintKind::EscapableFunctionOf,
          escapeClosure, noescapeClosure,
          CS.getConstraintLocator(locator, ConstraintLocator::RvalueAdjustment));
     auto result = CS.createTypeVariable(
-      CS.getConstraintLocator(locator, ConstraintLocator::FunctionResult), 0);
+      CS.getConstraintLocator(locator, ConstraintLocator::FunctionResult),
+      TVO_CanBindToInOut);
     auto bodyClosure = FunctionType::get(
       ParenType::get(CS.getASTContext(), escapeClosure), result,
         FunctionType::ExtInfo(FunctionType::Representation::Swift,
@@ -1380,14 +1412,17 @@ resolveOverloadForDeclWithSpecialTypeCheckingSemantics(ConstraintSystem &CS,
     // The body closure receives a freshly-opened archetype constrained by the
     // existential type as its input.
     auto openedTy = CS.createTypeVariable(
-      CS.getConstraintLocator(locator, ConstraintLocator::FunctionArgument), 0);
+      CS.getConstraintLocator(locator, ConstraintLocator::FunctionArgument),
+      TVO_CanBindToInOut);
     auto existentialTy = CS.createTypeVariable(
-      CS.getConstraintLocator(locator, ConstraintLocator::FunctionArgument), 0);
+      CS.getConstraintLocator(locator, ConstraintLocator::FunctionArgument),
+      TVO_CanBindToInOut);
     CS.addConstraint(ConstraintKind::OpenedExistentialOf,
          openedTy, existentialTy,
          CS.getConstraintLocator(locator, ConstraintLocator::RvalueAdjustment));
     auto result = CS.createTypeVariable(
-      CS.getConstraintLocator(locator, ConstraintLocator::FunctionResult), 0);
+      CS.getConstraintLocator(locator, ConstraintLocator::FunctionResult),
+      TVO_CanBindToInOut);
     auto bodyClosure = FunctionType::get(
       ParenType::get(CS.getASTContext(), openedTy), result,
         FunctionType::ExtInfo(FunctionType::Representation::Swift,
@@ -1520,12 +1555,15 @@ void ConstraintSystem::resolveOverload(ConstraintLocator *locator,
     // The element type is T or @lvalue T based on the key path subtype and
     // the mutability of the base.
     auto keyPathIndexTy = createTypeVariable(
-      getConstraintLocator(locator, ConstraintLocator::FunctionArgument), 0);
+      getConstraintLocator(locator, ConstraintLocator::FunctionArgument),
+      TVO_CanBindToInOut);
     auto elementTy = createTypeVariable(
             getConstraintLocator(locator, ConstraintLocator::FunctionArgument),
-            TVO_CanBindToLValue);
+            TVO_CanBindToLValue |
+            TVO_CanBindToInOut);
     auto elementObjTy = createTypeVariable(
-        getConstraintLocator(locator, ConstraintLocator::FunctionArgument), 0);
+        getConstraintLocator(locator, ConstraintLocator::FunctionArgument),
+        TVO_CanBindToInOut);
     addConstraint(ConstraintKind::Equal, elementTy, elementObjTy, locator);
     
     // The element result is an lvalue or rvalue based on the key path class.
@@ -1666,36 +1704,19 @@ Type simplifyTypeImpl(ConstraintSystem &cs, Type type, Fn getFixedTypeFn) {
         lookupBaseType = objectType;
       }
 
-      if (!lookupBaseType->mayHaveMembers()) return type;
-
-      auto subs = lookupBaseType->getContextSubstitutionMap(
+      if (lookupBaseType->mayHaveMembers()) {
+        auto subs = lookupBaseType->getContextSubstitutionMap(
           cs.DC->getParentModule(),
-          assocType->getDeclContext());
-      auto result = assocType->getDeclaredInterfaceType().subst(subs);
+            assocType->getDeclContext());
+        auto result = assocType->getDeclaredInterfaceType().subst(subs);
 
-      if (result)
-        return result;
-
-      return DependentMemberType::get(ErrorType::get(newBase), assocType);
-    }
-
-    // If this is a FunctionType and we inferred new function attributes, apply
-    // them.
-    if (auto ft = dyn_cast<FunctionType>(type.getPointer())) {
-      auto it = cs.extraFunctionAttrs.find(ft);
-      if (it != cs.extraFunctionAttrs.end()) {
-        auto extInfo = ft->getExtInfo();
-        if (it->second.isNoEscape())
-          extInfo = extInfo.withNoEscape();
-        if (it->second.throws())
-          extInfo = extInfo.withThrows();
-        return FunctionType::get(
-            simplifyTypeImpl(cs, ft->getInput(), getFixedTypeFn),
-            simplifyTypeImpl(cs, ft->getResult(), getFixedTypeFn),
-            extInfo);
+        if (result)
+          return result;
       }
+
+      return DependentMemberType::get(lookupBaseType, assocType);
     }
-    
+
     return type;
   });
 }

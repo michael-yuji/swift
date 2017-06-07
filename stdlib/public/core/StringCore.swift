@@ -416,6 +416,7 @@ public struct _StringCore {
   /// - Note: If unsuccessful because of insufficient space in an
   ///   existing buffer, the suggested new capacity will at least double
   ///   the existing buffer's storage.
+  @inline(__always)
   mutating func _claimCapacity(
     _ newSize: Int, minElementWidth: Int) -> (Int, UnsafeMutableRawPointer?) {
     if _fastPath(
@@ -431,11 +432,8 @@ public struct _StringCore {
       let usedEnd = _pointer(toElementAt:count)
 
       // Attempt to claim unused capacity in the buffer
-      if _fastPath(
-        buffer.grow(
-          oldBounds: UnsafeRawPointer(usedStart)..<UnsafeRawPointer(usedEnd),
-          newUsedCount: newSize)
-      ) {
+      if _fastPath(buffer.start == _baseAddress && newSize <= buffer.capacity) {
+        buffer.usedEnd = buffer.start + (newSize &<< elementShift)
         count = newSize
         return (0, usedEnd)
       }
@@ -452,6 +450,7 @@ public struct _StringCore {
   /// Effectively appends garbage to the String until it has newSize
   /// UTF-16 code units.  Returns a pointer to the garbage code units;
   /// you must immediately copy valid data into that storage.
+  @inline(__always)
   mutating func _growBuffer(
     _ newSize: Int, minElementWidth: Int
   ) -> UnsafeMutableRawPointer {

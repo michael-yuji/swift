@@ -696,15 +696,17 @@ private:
           if (AvAttr->PlatformAgnostic == PlatformAgnosticAvailabilityKind::Unavailable) {
             // Availability for *
             if (!AvAttr->Rename.empty()) {
-                // NB: Don't bother getting obj-c names, we can't get one for the rename
-                os << " SWIFT_UNAVAILABLE_MSG(\"'" << VD->getName() << "' has been renamed to '";
-                printEncodedString(AvAttr->Rename, false);
-                os << '\'';
-                if (!AvAttr->Message.empty()) {
-                  os << ": ";
-                  printEncodedString(AvAttr->Message, false);
-                }
-                os << "\")";
+              // NB: Don't bother getting obj-c names, we can't get one for the
+              // rename
+              os << " SWIFT_UNAVAILABLE_MSG(\"'" << VD->getBaseName()
+                 << "' has been renamed to '";
+              printEncodedString(AvAttr->Rename, false);
+              os << '\'';
+              if (!AvAttr->Message.empty()) {
+                os << ": ";
+                printEncodedString(AvAttr->Message, false);
+              }
+              os << "\")";
             } else if (!AvAttr->Message.empty()) {
               os << " SWIFT_UNAVAILABLE_MSG(";
               printEncodedString(AvAttr->Message);
@@ -790,7 +792,8 @@ private:
           }
           if (!AvAttr->Rename.empty()) {
             // NB: Don't bother getting obj-c names, we can't get one for the rename
-            os << ",message=\"'" << VD->getName() << "' has been renamed to '";
+            os << ",message=\"'" << VD->getBaseName()
+               << "' has been renamed to '";
             printEncodedString(AvAttr->Rename, false);
             os << '\'';
             if (!AvAttr->Message.empty()) {
@@ -1363,7 +1366,8 @@ private:
     if (alias->hasClangNode()) {
       if (auto *clangTypeDecl =
             dyn_cast<clang::TypeDecl>(alias->getClangDecl())) {
-        os << clangTypeDecl->getName();
+        maybePrintTagKeyword(alias);
+        os << getNameForObjC(alias);
 
         if (isClangPointerType(clangTypeDecl))
           printNullability(optionalKind);
@@ -1389,7 +1393,7 @@ private:
     visitPart(alias->getUnderlyingTypeLoc().getType(), optionalKind);
   }
 
-  void maybePrintTagKeyword(const NominalTypeDecl *NTD) {
+  void maybePrintTagKeyword(const TypeDecl *NTD) {
     if (isa<EnumDecl>(NTD) && !NTD->hasClangNode()) {
       os << "enum ";
       return;
@@ -2601,8 +2605,9 @@ public:
       assert(*lhs != *rhs && "duplicate top-level decl");
 
       auto getSortName = [](const Decl *D) -> StringRef {
+        // TODO: Handle special names
         if (auto VD = dyn_cast<ValueDecl>(D))
-          return VD->getName().str();
+          return VD->getBaseName().getIdentifier().str();
 
         if (auto ED = dyn_cast<ExtensionDecl>(D)) {
           auto baseClass = ED->getExtendedType()->getClassOrBoundGenericClass();

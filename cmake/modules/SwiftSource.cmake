@@ -243,10 +243,6 @@ function(_compile_swift_files
     list(APPEND swift_flags "-Xfrontend" "-assume-single-threaded")
   endif()
 
-  if(SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS)
-    list(APPEND swift_flags "-Xfrontend" "-enable-cow-existentials")
-  endif()
-
   if(SWIFT_STDLIB_ENABLE_SIL_OWNERSHIP AND SWIFTFILE_IS_STDLIB)
     list(APPEND swift_flags "-Xfrontend" "-enable-sil-ownership")
   endif()
@@ -392,6 +388,11 @@ function(_compile_swift_files
   set(main_command "-c")
   if (SWIFT_CHECK_INCREMENTAL_COMPILATION)
     set(swift_compiler_tool "${SWIFT_SOURCE_DIR}/utils/check-incremental" "${swift_compiler_tool}")
+  endif()
+
+  if (SWIFT_REPORT_STATISTICS)
+    list(GET obj_dirs 0 first_obj_dir)
+    list(APPEND swift_flags "-stats-output-dir" ${first_obj_dir})
   endif()
 
   set(standard_outputs ${SWIFTFILE_OUTPUT})
