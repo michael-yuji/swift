@@ -211,12 +211,17 @@ set(SWIFT_BENCH_MODULES
     cxx-source/CreateObjects
     # Disabled for rdar://128520766
     # cxx-source/CxxSetToCollection
+    cxx-source/CxxSpanBenchmarks
     cxx-source/CxxStringConversion
     # Disabled for rdar://128520766
     # cxx-source/CxxVectorSum
     # TODO: rdar://92120528
     # cxx-source/ReadAccessor
 )
+
+set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard to conform to")
+set(CMAKE_CXX_STANDARD_REQUIRED YES)
+set(CMAKE_CXX_EXTENSIONS NO)
 
 set(SWIFT_MULTISOURCE_SWIFT_BENCHES
   multi-source/PrimsSplit

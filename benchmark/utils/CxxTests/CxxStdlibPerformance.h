@@ -3,12 +3,15 @@
 #include <cstdint>
 #include <vector>
 #include <set>
+#include <span>
 
 using VectorOfU32 = std::vector<uint32_t>;
 using SetOfU32 = std::set<uint32_t>;
+using SpanOfU32 = std::span<uint32_t>;
 
 static inline VectorOfU32 vec;
 static inline SetOfU32 set;
+static inline SpanOfU32 span;
 
 inline void initVector(size_t size) {
     if (!vec.empty()) {
@@ -27,6 +30,13 @@ inline void initSet(size_t size) {
     for (size_t i = 0; i < size; ++i) {
         set.insert(uint32_t(i));
     }
+}
+
+inline void initSpan(size_t size) {
+    if (!span.empty()) {
+        return;
+    }
+    // TODO
 }
 
 inline VectorOfU32 makeVector32(size_t size) {
