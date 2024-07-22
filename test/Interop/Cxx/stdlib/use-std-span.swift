@@ -24,13 +24,13 @@ func checkSpan<T: RandomAccessCollection, E: Equatable>(_ s : T, _ arr: [E])
   }
 }
 
-func takesConstSpanOfInt(_ s: ConstSpan) {
-  expectEqual(s.size(), 3)
-  expectFalse(s.empty())
+func takesConstSpanOfInt(_ cs: ConstSpan) {
+  expectEqual(cs.size(), 3)
+  expectFalse(cs.empty())
 
-  expectEqual(s[0], 1)
-  expectEqual(s[1], 2)
-  expectEqual(s[2], 3)
+  expectEqual(cs[0], 1)
+  expectEqual(cs[1], 2)
+  expectEqual(cs[2], 3)
 }
 
 func takesSpanOfInt(_ s: inout Span) {
@@ -46,13 +46,13 @@ func takesSpanOfInt(_ s: inout Span) {
   expectEqual(s[2], 3)
 }
 
-func takesConstSpanOfString(_ s: ConstSpanOfString) {
-  expectEqual(s.size(), 3)
-  expectFalse(s.empty())
+func takesConstSpanOfString(_ cs: ConstSpanOfString) {
+  expectEqual(cs.size(), 3)
+  expectFalse(cs.empty())
 
-  expectEqual(s[0], "")
-  expectEqual(s[1], "ab")
-  expectEqual(s[2], "abc")
+  expectEqual(cs[0], "")
+  expectEqual(cs[1], "ab")
+  expectEqual(cs[2], "abc")
 }
 
 
@@ -316,10 +316,10 @@ StdSpanTestSuite.test("SpanOfString.init(ubpointer)") {
 
   let arrCopy = arr
   arr.withUnsafeMutableBufferPointer { ubpointer in
-    let s = SpanOfString(ubpointer)
-    checkSpan(s, arrCopy)
     let cs = ConstSpanOfString(ubpointer)
     checkSpan(cs, arrCopy)
+    let s = SpanOfString(ubpointer)
+    checkSpan(s, arrCopy)
   }
 }
 
@@ -349,9 +349,9 @@ StdSpanTestSuite.test("SpanOfInt for loop") {
 StdSpanTestSuite.test("SpanOfString for loop") {
   var arr: [std.string] = ["", "a", "ab", "abc"]
   arr.withUnsafeBufferPointer { ubpointer in
-    let s = ConstSpanOfString(ubpointer)
+    let cs = ConstSpanOfString(ubpointer)
     var count = 0
-    for e in s {
+    for e in cs {
       count += e.length();
     }
     expectEqual(count, 6)
@@ -370,8 +370,8 @@ StdSpanTestSuite.test("SpanOfString for loop") {
 StdSpanTestSuite.test("SpanOfInt.map") {
   var arr: [Int32] = [1, 2, 3]
   arr.withUnsafeBufferPointer { ubpointer in
-    let s = ConstSpan(ubpointer)
-    let result = s.map { $0 + 5 }
+    let cs = ConstSpan(ubpointer)
+    let result = cs.map { $0 + 5 }
     expectEqual(result, [6, 7, 8])
   }
 
@@ -385,8 +385,8 @@ StdSpanTestSuite.test("SpanOfInt.map") {
 StdSpanTestSuite.test("SpanOfString.map") {
   var arr: [std.string] = ["", "a", "ab", "abc"]
   arr.withUnsafeBufferPointer { ubpointer in
-    let s = ConstSpanOfString(ubpointer)
-    let result = s.map { $0.length() }
+    let cs = ConstSpanOfString(ubpointer)
+    let result = cs.map { $0.length() }
     expectEqual(result, [0, 1, 2, 3])
   }
 
@@ -400,8 +400,8 @@ StdSpanTestSuite.test("SpanOfString.map") {
 StdSpanTestSuite.test("SpanOfInt.filter") {
   var arr: [Int32] = [1, 2, 3, 4, 5]
   arr.withUnsafeBufferPointer { ubpointer in
-    let s = ConstSpan(ubpointer)
-    let result = s.filter { $0 > 3 }
+    let cs = ConstSpan(ubpointer)
+    let result = cs.filter { $0 > 3 }
     expectEqual(result.count, 2)
     expectEqual(result, [4, 5])
   }
@@ -417,8 +417,8 @@ StdSpanTestSuite.test("SpanOfInt.filter") {
 StdSpanTestSuite.test("SpanOfString.filter") {
   var arr: [std.string] = ["", "a", "ab", "abc"]
   arr.withUnsafeBufferPointer { ubpointer in
-    let s = ConstSpanOfString(ubpointer)
-    let result = s.filter { $0.length() > 1}
+    let cs = ConstSpanOfString(ubpointer)
+    let result = cs.filter { $0.length() > 1}
     expectEqual(result.count, 2)
     expectEqual(result, ["ab", "abc"])
   }
@@ -638,6 +638,62 @@ StdSpanTestSuite.test("Span as arg to generic func") {
   accessSpanAsSomeGenericParam(ispan)
   accessSpanAsSomeGenericParam(scspan)
   accessSpanAsSomeGenericParam(sspan)
+}
+
+StdSpanTestSuite.test("SpanOfInt for loop with RawIterator") {
+  var arr: [Int32] = [1, 2, 3]
+  arr.withUnsafeBufferPointer { ubpointer in
+    let cs = ConstSpan(ubpointer)
+    var count: Int32 = 1
+    var b = cs.__beginUnsafe()
+    let e = cs.__endUnsafe()
+    while b != e {
+      expectEqual(b.pointee, count)
+      b = b.successor()
+      count += 1
+    }
+    expectEqual(count, 4)
+  }
+
+  arr.withUnsafeMutableBufferPointer { ubpointer in
+    let s = Span(ubpointer)
+    var count: Int32 = 1
+    var b = s.__beginUnsafe()
+    let e = s.__endUnsafe()
+    while b != e {
+      expectEqual(b.pointee, count)
+      b = b.successor()
+      count += 1
+    }
+    expectEqual(count, 4)
+  }
+}
+
+StdSpanTestSuite.test("SpanOfString for loop with RawIterator") {
+  var arr: [std.string] = ["", "a", "ab", "abc"]
+  arr.withUnsafeBufferPointer { ubpointer in
+    let cs = ConstSpanOfString(ubpointer)
+    var count = 0
+    var b = cs.__beginUnsafe()
+    let e = cs.__endUnsafe()
+    while b != e {
+      count += b.pointee.length()
+      b = b.successor()
+    }
+    expectEqual(count, 6)
+  }
+
+  arr.withUnsafeMutableBufferPointer { ubpointer in
+    let s = SpanOfString(ubpointer)
+    var count = 0
+    var b = s.__beginUnsafe()
+    let e = s.__endUnsafe()
+    while b != e {
+      count += b.pointee.length()
+      b = b.successor()
+    }
+    expectEqual(count, 6)
+  }
 }
 
 runAllTests()
