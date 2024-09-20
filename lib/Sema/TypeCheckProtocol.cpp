@@ -1497,6 +1497,9 @@ swift::lookupValueWitnesses(DeclContext *DC, ValueDecl *req, bool *ignoringNames
                         options, lookupResults);
     for (auto *decl : lookupResults) {
       // a distributed thunk is the witness
+      // TODO breakpoint here to see all lookupResults
+      // TODO alternatively `decl->dump()` for each iter 
+
       if (!isa<ProtocolDecl>(decl->getDeclContext())) {
         auto func = dyn_cast<AbstractFunctionDecl>(req);
         if (func && func->isDistributedThunk()) {
@@ -1536,6 +1539,8 @@ swift::lookupValueWitnesses(DeclContext *DC, ValueDecl *req, bool *ignoringNames
     return isa<ProtocolDecl>(decl->getDeclContext());
   }));
 
+  // TODO breakpoint here
+  // TODO for loop to dump all witnesses
   return witnesses;
 }
 
@@ -1560,6 +1565,7 @@ bool WitnessChecker::findBestWitness(
     SmallVector<ValueDecl *, 4> witnesses;
     switch (attempt) {
     case Regular:
+      // TODO breakpoint here
       witnesses = lookupValueWitnesses(DC, requirement, ignoringNames);
       break;
     case OperatorsFromOverlay: {
@@ -1592,6 +1598,8 @@ bool WitnessChecker::findBestWitness(
     anyFromUnconstrainedExtension = false;
     bestIdx = 0;
 
+    // TODO dump all witnesses -> there should be subscript functions from C++ and others from Swift
+
     for (auto witness : witnesses) {
       // Don't match anything in a protocol.
       // FIXME: When default implementations come along, we can try to match
@@ -1617,7 +1625,13 @@ bool WitnessChecker::findBestWitness(
 
       matches.push_back(std::move(match));
     }
+
   }
+
+  // TODO dump matches -> do we see the one from CxxRandomAccessCollection? 
+  // TODO If not, is there one from Swift? 
+  // TODO Is there any from C++?
+  // TODO How does this differ between the correct and incorrect examples?
 
   // If there are multiple viable matches, drop any that are less available than the
   // requirement.

@@ -2561,6 +2561,15 @@ QualifiedLookupRequest::evaluate(Evaluator &eval, const DeclContext *DC,
   llvm::SmallPtrSet<NominalTypeDecl *, 4> visited;
   bool sawClassDecl = false;
 
+  if (auto namedT = dyn_cast<NominalTypeDecl>(DC)) {
+    if (namedT->getName().is("span<CInt, _CUnsignedLong_-1>")) {
+      if (member.getBaseName().isSubscript()) {
+        // TODO add breakpoint here to find executions for subscript
+        llvm::errs() << "breakpoint here\n";
+      }
+    }
+  }
+
   // Add the given nominal type to the stack.
   auto addNominalType = [&](NominalTypeDecl *nominal) {
     if (!visited.insert(nominal).second)
