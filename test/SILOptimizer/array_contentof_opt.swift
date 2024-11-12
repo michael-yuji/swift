@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend -O -sil-verify-all -emit-sil -Xllvm '-sil-inline-never-functions=$sSa6appendyy' -Xllvm -sil-inline-never-function='$sSa6append10contentsOfyqd__n_t7ElementQyd__RszSTRd__lFSi_SaySiGTg5' %s | %FileCheck %s
+// RUN: %target-swift-frontend -O -sil-verify-all -emit-sil -Xllvm '-sil-inline-never-functions=$sSa6appendyy' -Xllvm -sil-inline-never-function='$sSa6append10contentsOfyqd__n_t7ElementQyd__RszSlRd__lFSi_SaySiGTg5' %s | %FileCheck %s
 // REQUIRES: swift_stdlib_no_asserts,optimized_stdlib
 
 // This is an end-to-end test of the Array.append(contentsOf:) ->
@@ -63,7 +63,7 @@ public func dontPropagateContiguousArray(_ a: inout ContiguousArray<UInt8>) {
 
 // Check if the specialized Array.append<A>(contentsOf:) is reasonably optimized for Array<Int>.
 
-// CHECK-LABEL: sil shared {{.*}}@$sSa6append10contentsOfyqd__n_t7ElementQyd__RszSTRd__lFSi_SaySiGTg5
+// CHECK-LABEL: sil shared {{.*}}@$sSa6append10contentsOfyqd__n_t7ElementQyd__RszSlRd__lFSi_SaySiGTg5
 
 // There should only be a single call to _createNewBuffer or reserveCapacityForAppend/reserveCapacityImpl.
 
@@ -72,5 +72,5 @@ public func dontPropagateContiguousArray(_ a: inout ContiguousArray<UInt8>) {
 // CHECK: apply [[F]]
 // CHECK-NOT: apply
 
-// CHECK-LABEL: } // end sil function '$sSa6append10contentsOfyqd__n_t7ElementQyd__RszSTRd__lFSi_SaySiGTg5
+// CHECK-LABEL: } // end sil function '$sSa6append10contentsOfyqd__n_t7ElementQyd__RszSlRd__lFSi_SaySiGTg5
 
