@@ -1,6 +1,6 @@
 // RUN: rm -rf %t
 // RUN: split-file %s %t
-// RUN: %target-swift-frontend -I %swift_src_root/lib/ClangImporter/SwiftBridging  -I %t/Inputs -emit-sil %t/test.swift -enable-experimental-feature NonescapableTypes -cxx-interoperability-mode=default -diagnostic-style llvm 2>&1 | %FileCheck %s
+// RUN: %target-swift-frontend -I %swift_src_root/lib/ClangImporter/SwiftBridging  -I %t/Inputs -emit-silgen %t/test.swift -enable-experimental-feature NonescapableTypes -cxx-interoperability-mode=default -diagnostic-style llvm 2>&1 | %FileCheck %s
 
 // REQUIRES: swift_feature_NonescapableTypes
 
@@ -82,16 +82,43 @@ View returnsImmortal() SWIFT_RETURNS_INDEPENDENT_VALUE {
     return View();
 }
 
-// CHECK: sil [clang makeOwner] {{.*}}: $@convention(c) () -> Owner
-// CHECK: sil [clang getView] {{.*}} : $@convention(c) (@in_guaranteed Owner) -> @lifetime(borrow 0) @autoreleased View
-// CHECK: sil [clang getViewFromFirst] {{.*}} : $@convention(c) (@in_guaranteed Owner, @in_guaranteed Owner) -> @lifetime(borrow 0) @autoreleased View
-// CHECK: sil [clang getViewFromEither] {{.*}} : $@convention(c) (@in_guaranteed Owner, @in_guaranteed Owner) -> @lifetime(borrow 0, borrow 1) @autoreleased View
+void copyView(View view1 [[clang::lifetime_capture_by(view2)]], View &view2) {
+    view2 = view1;
+}
+
+struct SWIFT_NONESCAPABLE CaptureView {
+    CaptureView() : view(nullptr) {}
+    CaptureView(View p [[clang::lifetimebound]]) : view(p) {}
+
+    void captureView(View v [[clang::lifetime_capture_by(this)]]) {
+        view = v;
+    }
+
+    void handOut(View &v) const [[clang::lifetime_capture_by(v)]] {
+       v = view; 
+    }
+
+    View view;
+};
+
+CaptureView getCaptureView(const Owner& owner [[clang::lifetimebound]]) {
+    return CaptureView(View{&owner.data});
+}
+
+// CHECK: sil {{.*}} [clang makeOwner] {{.*}}: $@convention(c) () -> Owner
+// CHECK: sil {{.*}} [clang getView] {{.*}} : $@convention(c) (@in_guaranteed Owner) -> @lifetime(borrow 0) @autoreleased View
+// CHECK: sil {{.*}} [clang getViewFromFirst] {{.*}} : $@convention(c) (@in_guaranteed Owner, @in_guaranteed Owner) -> @lifetime(borrow 0) @autoreleased View
+// CHECK: sil {{.*}} [clang getViewFromEither] {{.*}} : $@convention(c) (@in_guaranteed Owner, @in_guaranteed Owner) -> @lifetime(borrow 0, borrow 1) @autoreleased View
 // CHECK: sil [clang Owner.handOutView] {{.*}} : $@convention(cxx_method) (@in_guaranteed Owner) -> @lifetime(borrow 0) @autoreleased View
 // CHECK: sil [clang Owner.handOutView2] {{.*}} : $@convention(cxx_method) (View, @in_guaranteed Owner) -> @lifetime(borrow 1) @autoreleased View
-// CHECK: sil [clang getViewFromEither] {{.*}} : $@convention(c) (@guaranteed View, @guaranteed View) -> @lifetime(copy 0, copy 1) @autoreleased View
+// CHECK: sil {{.*}} [clang getViewFromEither] {{.*}} : $@convention(c) (@guaranteed View, @guaranteed View) -> @lifetime(copy 0, copy 1) @autoreleased View
 // CHECK: sil [clang View.init] {{.*}} : $@convention(c) () -> @lifetime(immortal) @out View
 // CHECK: sil [clang OtherView.init] {{.*}} : $@convention(c) (@guaranteed View) -> @lifetime(copy 0) @out OtherView
-// CHECK: sil [clang returnsImmortal] {{.*}} : $@convention(c) () -> @lifetime(immortal) @autoreleased View
+// CHECK: sil {{.*}} [clang returnsImmortal] {{.*}} : $@convention(c) () -> @lifetime(immortal) @autoreleased View
+// CHECK: sil {{.*}} [clang copyView] {{.*}} : $@convention(c) (View, @lifetime(copy 0) @inout View) -> ()
+// CHECK: sil {{.*}} [clang getCaptureView] {{.*}} : $@convention(c) (@in_guaranteed Owner) -> @lifetime(borrow 0) @autoreleased CaptureView
+// CHECK: sil [clang CaptureView.captureView] {{.*}} : $@convention(cxx_method) (View, @lifetime(copy 0) @inout CaptureView) -> ()
+// CHECK: sil [clang CaptureView.handOut] {{.*}} : $@convention(cxx_method) (@lifetime(copy 1) @inout View, @in_guaranteed CaptureView) -> ()
 
 //--- test.swift
 
@@ -100,7 +127,7 @@ import Test
 public func test() {
     let o = makeOwner()
     let o2 = makeOwner()
-    let v1 = getView(o)
+    var v1 = getView(o)
     let v2 = getViewFromFirst(o, o2)
     let _ = getViewFromEither(o, o2)
     let _ = o.handOutView()
@@ -109,4 +136,8 @@ public func test() {
     let defaultView = View()
     let _ = OtherView(defaultView)
     let _ = returnsImmortal()
+    copyView(v2, &v1)
+    var cv = getCaptureView(o)
+    cv.captureView(v1)
+    cv.handOut(&v1)
 }
