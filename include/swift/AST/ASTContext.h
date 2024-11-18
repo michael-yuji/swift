@@ -1232,6 +1232,7 @@ public:
   /// \returns The Swift overlay module corresponding to the given Clang module,
   /// or NULL if the overlay module cannot be found.
   ModuleDecl *getOverlayModule(const FileUnit *ClangModule);
+  ModuleDecl *getOverlayModule(ImportPath::Module clangModulePath);
 
   ModuleDecl *getModuleByName(StringRef ModuleName);
 

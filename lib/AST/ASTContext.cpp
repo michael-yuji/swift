@@ -2752,7 +2752,10 @@ ModuleDecl *ASTContext::getOverlayModule(const FileUnit *FU) {
   assert(FU && FU->getKind() == FileUnitKind::ClangModule &&
          "Overlays can only be retrieved for clang modules!");
   ImportPath::Module::Builder builder(FU->getParentModule()->getName());
-  auto ModPath = builder.get();
+  return getOverlayModule(builder.get());
+}
+
+ModuleDecl *ASTContext::getOverlayModule(ImportPath::Module ModPath) {
   if (auto *Existing = getLoadedModule(ModPath)) {
     if (!Existing->isNonSwiftModule())
       return Existing;

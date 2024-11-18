@@ -1814,6 +1814,10 @@ void InterfaceSubContextDelegateImpl::inheritOptionsForBuildingInterface(
     genericSubInvocation.getClangImporterOptions().UseClangIncludeTree = false;
     GenericArgs.push_back("-no-clang-include-tree");
   }
+
+  if (!LangOpts.isUsingPlatformDefaultCXXStdlib()) {
+    genericSubInvocation.getLangOptions().CXXStdlib = LangOpts.CXXStdlib;
+  }
 }
 
 bool InterfaceSubContextDelegateImpl::extractSwiftInterfaceVersionAndArgs(
@@ -2230,6 +2234,16 @@ InterfaceSubContextDelegateImpl::runInSubCompilerInstance(StringRef moduleName,
   assert(subInvocation.getFrontendOptions().InputsAndOutputs.isWholeModule());
   subInvocation.getFrontendOptions().InputsAndOutputs
     .setMainAndSupplementaryOutputs(outputFiles, ModuleOutputPaths);
+
+  // If the current compilation uses C++ interop, and the swiftinterface was
+  // built with C++ interop, make sure we rebuild the interface with the right
+  // C++ stdlib.
+  if (!subInvocation.getLangOptions().isUsingPlatformDefaultCXXStdlib()) {
+    auto s = subInvocation.getLangOptions().CXXStdlib; // FIXME user string
+    BuildArgs.push_back("-cxx-interoperability-mode=default");
+    BuildArgs.push_back("-Xcc");
+    BuildArgs.push_back("-stdlib=" + to_string(s));
+  }
 
   SwiftInterfaceInfo interfaceInfo;
   // Extract compiler arguments from the interface file and use them to configure

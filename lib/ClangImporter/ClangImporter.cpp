@@ -4330,6 +4330,7 @@ ModuleDecl *ClangModuleUnit::getOverlayModule() const {
     // FIXME: Include proper source location.
     ModuleDecl *M = getParentModule();
     ASTContext &Ctx = M->getASTContext();
+    ImportPath::Module::Builder builder(M->getName());
     auto overlay = Ctx.getOverlayModule(this);
     if (overlay) {
       Ctx.addLoadedModule(overlay);
@@ -4344,17 +4345,15 @@ ModuleDecl *ClangModuleUnit::getOverlayModule() const {
       // untangling them is going to take a heroic amount of effort.
       // Clang module loading should *never* *ever* be allowed to load unrelated
       // Swift modules.
-      ImportPath::Module::Builder builder(M->getName());
       (void) owner.loadModule(SourceLoc(), std::move(builder).get());
     }
     // If this Clang module is a part of the C++ stdlib, and we haven't loaded
     // the overlay for it so far, it is a split libc++ module (e.g. std_vector).
     // Load the CxxStdlib overlay explicitly, if building with the
     // platform-default C++ stdlib.
-    if (!overlay && importer::isCxxStdModule(clangModule) &&
-        Ctx.LangOpts.isUsingPlatformDefaultCXXStdlib()) {
+    if (!overlay && importer::isCxxStdModule(clangModule)) {
       ImportPath::Module::Builder builder(Ctx.Id_CxxStdlib);
-      overlay = owner.loadModule(SourceLoc(), std::move(builder).get());
+      overlay = Ctx.getOverlayModule(builder.get());
     }
     auto mutableThis = const_cast<ClangModuleUnit *>(this);
     mutableThis->overlayModule.setPointerAndInt(overlay, true);
