@@ -76,6 +76,13 @@ Outer<View>::NonTemplated::Inner<Owner> j1();
 Outer<Owner>::NonTemplated::Inner<View> j2();
 Outer<Owner>::NonTemplated::Inner<Owner> j3();
 
+template<typename... Ts>
+struct SWIFT_ESCAPABLE_IF(Ts) MyTuple {};
+
+MyTuple<View> k1();
+MyTuple<Owner, View> k2();
+MyTuple<Owner, Owner> k3();
+
 //--- test.swift
 
 import Test
@@ -105,6 +112,11 @@ public func noAnnotations() -> View {
     j2()
     // CHECK: nonescapable.h:63:41: error: cannot infer lifetime dependence, no parameters found that are either ~Escapable or Escapable with a borrowing ownership
     j3()
+    k1();
+    // CHECK: nonescapable.h:69:15: error: cannot infer lifetime dependence, no parameters found that are either ~Escapable or Escapable with a borrowing ownership
+    k2();
+    // CHECK: nonescapable.h:70:22: error: cannot infer lifetime dependence, no parameters found that are either ~Escapable or Escapable with a borrowing ownership
+    k3();
     // CHECK-NOT: error
     // CHECK-NOT: warning
     return View()
