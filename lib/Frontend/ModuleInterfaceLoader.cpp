@@ -2019,7 +2019,11 @@ InterfaceSubContextDelegateImpl::InterfaceSubContextDelegateImpl(
   if (langOpts.EnableCXXInterop &&
       (frontendOpts.DisableImplicitModules ||
        LoaderOpts.requestedAction ==
-           FrontendOptions::ActionType::ScanDependencies)) {
+           FrontendOptions::ActionType::ScanDependencies ||
+       LoaderOpts.requestedAction ==
+           FrontendOptions::ActionType::CompileModuleFromInterface ||
+       LoaderOpts.requestedAction ==
+           FrontendOptions::ActionType::TypecheckModuleFromInterface)) {
     // Modelled after a reverse of validateCxxInteropCompatibilityMode
     genericSubInvocation.getLangOptions().EnableCXXInterop = true;
     genericSubInvocation.getLangOptions().cxxInteropCompatVersion =
