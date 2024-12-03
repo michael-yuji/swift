@@ -394,7 +394,8 @@ void CompilerInvocation::computeCXXStdlibOptions() {
     LangOpts.CXXStdlib = CXXStdlibKind::Msvcprt;
     LangOpts.PlatformDefaultCXXStdlib = CXXStdlibKind::Msvcprt;
   }
-  if (LangOpts.Target.isOSLinux() || LangOpts.Target.isOSDarwin()) {
+  if (LangOpts.Target.isOSLinux() || LangOpts.Target.isOSDarwin() ||
+        LangOpts.Target.isOSFreeBSD()) {
     LangOpts.CXXStdlib = toCXXStdlibKind(cxxStdlibKind);
     LangOpts.PlatformDefaultCXXStdlib = toCXXStdlibKind(cxxDefaultStdlibKind);
   }

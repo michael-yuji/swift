@@ -522,7 +522,7 @@ swift::dependencies::registerCxxInteropLibraries(
       break;
     }
     default:
-      if (Target.isOSDarwin() || Target.isOSLinux())
+      if (Target.isOSDarwin() || Target.isOSLinux() || Target.isOSFreeBSD())
         RegistrationCallback(LinkLibrary("swiftCxxStdlib",
                                          LibraryKind::Library));
       break;
