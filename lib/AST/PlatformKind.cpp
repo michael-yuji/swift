@@ -97,6 +97,7 @@ static bool isApplicationExtensionPlatform(PlatformKind Platform) {
   case PlatformKind::tvOS:
   case PlatformKind::watchOS:
   case PlatformKind::OpenBSD:
+  case PlatformKind::FreeBSD:
   case PlatformKind::Windows:
   case PlatformKind::none:
     return false;
@@ -133,6 +134,8 @@ static bool isPlatformActiveForTarget(PlatformKind Platform,
       return Target.isWatchOS();
     case PlatformKind::OpenBSD:
       return Target.isOSOpenBSD();
+    case PlatformKind::FreeBSD:
+      return Target.isOSFreeBSD();
     case PlatformKind::Windows:
       return Target.isOSWindows();
     case PlatformKind::none:

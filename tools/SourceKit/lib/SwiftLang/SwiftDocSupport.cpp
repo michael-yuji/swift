@@ -687,6 +687,7 @@ static void reportAttributes(ASTContext &Ctx,
   static UIdent PlatformtvOSAppExt("source.availability.platform.tvos_app_extension");
   static UIdent PlatformWatchOSAppExt("source.availability.platform.watchos_app_extension");
   static UIdent PlatformOpenBSD("source.availability.platform.openbsd");
+  static UIdent PlatformFreeBSD("source.availability.platform.freebsd");
   static UIdent PlatformWindows("source.availability.platform.windows");
   std::vector<const DeclAttribute*> Scratch;
 
@@ -718,6 +719,8 @@ static void reportAttributes(ASTContext &Ctx,
         PlatformUID = PlatformWatchOSAppExt; break;
       case PlatformKind::OpenBSD:
         PlatformUID = PlatformOpenBSD; break;
+      case PlatformKind::FreeBSD:
+        PlatformUID = PlatformFreeBSD; break;
       case PlatformKind::Windows:
         PlatformUID = PlatformWindows; break;
       }

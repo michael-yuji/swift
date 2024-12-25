@@ -2274,6 +2274,10 @@ PlatformAvailability::PlatformAvailability(const LangOptions &langOpts)
     deprecatedAsUnavailableMessage = "";
     break;
 
+  case PlatformKind::FreeBSD:
+    deprecatedAsUnavailableMessage = "";
+    break;
+
   case PlatformKind::Windows:
     deprecatedAsUnavailableMessage = "";
     break;
@@ -2313,6 +2317,9 @@ bool PlatformAvailability::isPlatformRelevant(StringRef name) const {
 
   case PlatformKind::OpenBSD:
     return name == "openbsd";
+
+  case PlatformKind::FreeBSD:
+    return name == "freebsd";
 
   case PlatformKind::Windows:
     return name == "windows";
@@ -2375,6 +2382,10 @@ bool PlatformAvailability::treatDeprecatedAsUnavailable(
     }
 
     // No deprecation filter on watchOS
+    return false;
+
+  case PlatformKind::FreeBSD:
+    // No deprecation filter on FreeBSD
     return false;
 
   case PlatformKind::OpenBSD:

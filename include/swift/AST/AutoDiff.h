@@ -420,8 +420,17 @@ public:
   /// The error kind.
   Kind kind;
 
+#if defined(__FreeBSD__) && __FreeBSD__ < 14
+  struct TypeAndIndex {
+    Type first;
+    unsigned second;
+
+    TypeAndIndex(Type type, unsigned index) : first(type), second(index) {}
+  };
+#else
   /// The type and index of a differentiability parameter or result.
   using TypeAndIndex = std::pair<Type, unsigned>;
+#endif
 
 private:
   union Value {
