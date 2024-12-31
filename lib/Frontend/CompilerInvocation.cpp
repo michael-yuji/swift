@@ -864,8 +864,6 @@ static bool ParseEnabledFeatureArgs(LangOptions &Opts, ArgList &Args,
     Opts.enableFeature(Feature::NoImplicitCopy);
     Opts.enableFeature(Feature::OldOwnershipOperatorSpellings);
   }
-  if (Args.hasArg(OPT_experimental_one_way_closure_params))
-    Opts.enableFeature(Feature::OneWayClosureParameters);
   if (Args.hasArg(OPT_enable_experimental_forward_mode_differentiation))
     Opts.enableFeature(Feature::ForwardModeDifferentiation);
   if (Args.hasArg(OPT_enable_experimental_additive_arithmetic_derivation))
@@ -2825,6 +2823,7 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
 
   Opts.VerifyAll |= Args.hasArg(OPT_sil_verify_all);
   Opts.VerifyNone |= Args.hasArg(OPT_sil_verify_none);
+  Opts.VerifyOwnershipAll |= Args.hasArg(OPT_sil_ownership_verify_all);
   Opts.DebugSerialization |= Args.hasArg(OPT_sil_debug_serialization);
   Opts.EmitVerboseSIL |= Args.hasArg(OPT_emit_verbose_sil);
   Opts.EmitSortedSIL |= Args.hasArg(OPT_emit_sorted_sil);

@@ -22,6 +22,7 @@
 #include "SILBridging.h"
 #include "swift/AST/Builtins.h"
 #include "swift/AST/Decl.h"
+#include "swift/AST/SourceFile.h"
 #include "swift/AST/SubstitutionMap.h"
 #include "swift/AST/Types.h"
 #include "swift/Basic/BasicBridging.h"
@@ -283,12 +284,11 @@ BridgedType::EnumElementIterator BridgedType::EnumElementIterator::getNext() con
   return bridge(std::next(unbridge(*this)));
 }
 
-BridgedType BridgedType::createObjectType(BridgedCanType canTy) {
-  return swift::SILType::getPrimitiveObjectType(canTy.unbridged());
-}
-
-BridgedType BridgedType::createAddressType(BridgedCanType canTy) {
-  return swift::SILType::getPrimitiveAddressType(canTy.unbridged());
+BridgedType BridgedType::createSILType(BridgedCanType canTy) {
+  auto ty = canTy.unbridged();
+  if (ty->isLegalSILType())
+    return swift::SILType::getPrimitiveObjectType(ty);
+  return swift::SILType();
 }
 
 BridgedOwnedString BridgedType::getDebugDescription() const {
@@ -419,10 +419,6 @@ bool BridgedType::isVoid() const {
 
 bool BridgedType::isEmpty(BridgedFunction f) const {
   return unbridged().isEmpty(*f.getFunction());
-}
-
-BridgedType::TraitResult BridgedType::canBeClass() const {
-  return (TraitResult)unbridged().canBeClass();
 }
 
 bool BridgedType::isMoveOnly() const {
@@ -676,6 +672,10 @@ void BridgedArgument::setReborrow(bool reborrow) const {
   getArgument()->setReborrow(reborrow);
 }
 
+bool BridgedArgument::FunctionArgument_isLexical() const {
+  return llvm::cast<swift::SILFunctionArgument>(getArgument())->getLifetime().isLexical();
+}
+
 OptionalBridgedDeclObj BridgedArgument::getVarDecl() const {
   return {llvm::dyn_cast_or_null<swift::VarDecl>(getArgument()->getDecl())};
 }
@@ -908,7 +908,10 @@ bool BridgedFunction::isResilientNominalDecl(BridgedDeclObj decl) const {
                                                            getFunction()->getResilienceExpansion());
 }
 
-BridgedType BridgedFunction::getLoweredType(BridgedASTType type) const {
+BridgedType BridgedFunction::getLoweredType(BridgedASTType type, bool maximallyAbstracted) const {
+  if (maximallyAbstracted) {
+    return BridgedType(getFunction()->getLoweredType(swift::Lowering::AbstractionPattern::getOpaque(), type.type));
+  }
   return BridgedType(getFunction()->getLoweredType(type.type));
 }
 
@@ -918,6 +921,14 @@ BridgedType BridgedFunction::getLoweredType(BridgedType type) const {
 
 swift::SILFunction * _Nullable OptionalBridgedFunction::getFunction() const {
   return static_cast<swift::SILFunction *>(obj);
+}
+
+BridgedFunction::OptionalSourceFileKind BridgedFunction::getSourceFileKind() const {
+  if (auto *dc = getFunction()->getDeclContext()) {
+    if (auto *sourceFile = dc->getParentSourceFile())
+      return (OptionalSourceFileKind)sourceFile->Kind;
+  }
+  return OptionalSourceFileKind::None;
 }
 
 //===----------------------------------------------------------------------===//
@@ -973,24 +984,7 @@ SwiftInt BridgedMultiValueResult::getIndex() const {
 }
 
 //===----------------------------------------------------------------------===//
-//                                BridgedTypeArray
-//===----------------------------------------------------------------------===//
-
-BridgedTypeArray 
-BridgedTypeArray::fromReplacementTypes(BridgedSubstitutionMap substMap) {
-  return {substMap.unbridged().getReplacementTypes()};
-}
-
-BridgedType BridgedTypeArray::getAt(SwiftInt index) const {
-  swift::Type origTy = typeArray.unbridged<swift::Type>()[index];
-  auto ty = origTy->getCanonicalType();
-  if (ty->isLegalSILType())
-    return swift::SILType::getPrimitiveObjectType(ty);
-  return swift::SILType();
-}
-
-//===----------------------------------------------------------------------===//
-//                                BridgedTypeArray
+//                              BridgedSILTypeArray
 //===----------------------------------------------------------------------===//
 
 BridgedType BridgedSILTypeArray::getAt(SwiftInt index) const {

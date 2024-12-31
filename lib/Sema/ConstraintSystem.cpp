@@ -117,7 +117,7 @@ ConstraintSystem::ConstraintSystem(DeclContext *dc,
   : Context(dc->getASTContext()), DC(dc), Options(options),
     diagnosticTransaction(diagnosticTransaction),
     Arena(dc->getASTContext(), Allocator),
-    CG(*new ConstraintGraph(*this))
+    CG(*this)
 {
   assert(DC && "context required");
   // Respect the global debugging flag, but turn off debugging while
@@ -131,7 +131,11 @@ ConstraintSystem::ConstraintSystem(DeclContext *dc,
 }
 
 ConstraintSystem::~ConstraintSystem() {
-  delete &CG;
+  for (unsigned i = 0, n = TypeVariables.size(); i != n; ++i) {
+    auto &impl = TypeVariables[i]->getImpl();
+    delete impl.getGraphNode();
+    impl.setGraphNode(nullptr);
+  }
 }
 
 void ConstraintSystem::startExpressionTimer(ExpressionTimer::AnchorType anchor) {
@@ -1102,7 +1106,7 @@ TypeVariableType *ConstraintSystem::isRepresentativeFor(
   if (getRepresentative(typeVar) != typeVar)
     return nullptr;
 
-  auto &CG = getConstraintGraph();
+  auto &CG = const_cast<ConstraintSystem *>(this)->getConstraintGraph();
   auto &result = CG[typeVar];
   auto equivalence = result.getEquivalenceClass();
   auto member = llvm::find_if(equivalence, [=](TypeVariableType *eq) {
@@ -1952,16 +1956,15 @@ OverloadChoice::getIUOReferenceKind(ConstraintSystem &cs,
   if (!decl->getInterfaceType()->is<AnyFunctionType>())
     return IUOReferenceKind::Value;
 
-  auto refKind = getFunctionRefKind();
-  assert(!forSecondApplication || refKind == FunctionRefKind::DoubleApply);
+  auto refKind = getFunctionRefInfo();
+  assert(!forSecondApplication || refKind.isDoubleApply());
 
-  switch (refKind) {
-  case FunctionRefKind::Unapplied:
-  case FunctionRefKind::Compound:
+  switch (refKind.getApplyLevel()) {
+  case FunctionRefInfo::ApplyLevel::Unapplied:
     // Such references never produce IUOs.
     return std::nullopt;
-  case FunctionRefKind::SingleApply:
-  case FunctionRefKind::DoubleApply: {
+  case FunctionRefInfo::ApplyLevel::SingleApply:
+  case FunctionRefInfo::ApplyLevel::DoubleApply:
     // Check whether this is a curried function reference e.g
     // (Self) -> (Args...) -> Ret. Such a function reference can only produce
     // an IUO on the second application.
@@ -1969,7 +1972,6 @@ OverloadChoice::getIUOReferenceKind(ConstraintSystem &cs,
     if (forSecondApplication != isCurried)
       return std::nullopt;
     break;
-  }
   }
   return IUOReferenceKind::ReturnValue;
 }

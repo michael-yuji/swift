@@ -28,6 +28,7 @@
 #include "swift/AST/NameLookupRequests.h"
 #include "swift/AST/ParameterList.h"
 #include "swift/AST/TypeCheckRequests.h"
+#include "swift/AST/UnsafeUse.h"
 #include "swift/Basic/Assertions.h"
 using namespace swift;
 
@@ -242,15 +243,15 @@ bool swift::isOverrideBasedOnType(const ValueDecl *decl, Type declTy,
 
 static bool isUnavailableInAllVersions(ValueDecl *decl) {
   ASTContext &ctx = decl->getASTContext();
-  auto *attr = decl->getAttrs().getUnavailable(ctx);
-
+  auto attr = decl->getUnavailableAttr();
   if (!attr)
     return false;
+
   if (attr->isUnconditionallyUnavailable())
     return true;
 
-  return attr->getVersionAvailability(ctx)
-             == AvailableVersionComparison::Unavailable;
+  return attr->getVersionAvailability(ctx) ==
+         AvailableVersionComparison::Unavailable;
 }
 
 /// Perform basic checking to determine whether a declaration can override a
@@ -1735,7 +1736,14 @@ namespace  {
     UNINTERESTING_ATTR(StaticExclusiveOnly)
     UNINTERESTING_ATTR(PreInverseGenerics)
     UNINTERESTING_ATTR(Lifetime)
+    UNINTERESTING_ATTR(AddressableSelf)
+    UNINTERESTING_ATTR(Unsafe)
+    UNINTERESTING_ATTR(Safe)
 #undef UNINTERESTING_ATTR
+
+    void visitABIAttr(ABIAttr *attr) {
+      // TODO: Match or infer
+    }
 
     void visitAvailableAttr(AvailableAttr *attr) {
       // FIXME: Check that this declaration is at least as available as the
@@ -1765,17 +1773,6 @@ namespace  {
     }
 
     void visitObjCAttr(ObjCAttr *attr) {}
-
-    void visitUnsafeAttr(UnsafeAttr *attr) {
-      if (!Base->getASTContext().LangOpts.hasFeature(Feature::WarnUnsafe))
-        return;
-
-      if (Override->isUnsafe() && !Base->isUnsafe()) {
-        Diags.diagnose(Override, diag::override_safe_withunsafe,
-                       Base->getDescriptiveKind());
-        Diags.diagnose(Base, diag::overridden_here);
-      }
-    }
   };
 } // end anonymous namespace
 
@@ -1924,7 +1921,7 @@ checkOverrideUnavailability(ValueDecl *override, ValueDecl *base) {
   if (auto *overrideParent = override->getDeclContext()->getAsDecl()) {
     // If the parent of the override is unavailable, then the unavailability of
     // the override decl is irrelevant.
-    if (overrideParent->getSemanticUnavailableAttr())
+    if (overrideParent->isSemanticallyUnavailable())
       return {OverrideUnavailabilityStatus::Ignored, nullptr};
   }
 
@@ -1946,12 +1943,12 @@ checkOverrideUnavailability(ValueDecl *override, ValueDecl *base) {
     }
   }
 
-  auto &ctx = override->getASTContext();
-  auto *baseUnavailableAttr = base->getAttrs().getUnavailable(ctx);
-  auto *overrideUnavailableAttr = override->getAttrs().getUnavailable(ctx);
+  auto baseUnavailableAttr = base->getUnavailableAttr();
+  auto overrideUnavailableAttr = override->getUnavailableAttr();
 
   if (baseUnavailableAttr && !overrideUnavailableAttr)
-    return {OverrideUnavailabilityStatus::BaseUnavailable, baseUnavailableAttr};
+    return {OverrideUnavailabilityStatus::BaseUnavailable,
+            baseUnavailableAttr->getParsedAttr()};
 
   return {OverrideUnavailabilityStatus::Compatible, nullptr};
 }
@@ -2252,6 +2249,16 @@ static bool checkSingleOverride(ValueDecl *override, ValueDecl *base) {
     diagnoseOverrideForAvailability(override, base);
   }
 
+  if (ctx.LangOpts.hasFeature(Feature::WarnUnsafe) &&
+      override->isUnsafe() && !base->isUnsafe()) {
+    // Don't diagnose @unsafe overrides if the subclass is @unsafe.
+    auto overridingClass = override->getDeclContext()->getSelfClassDecl();
+    bool shouldDiagnose = !overridingClass || !overridingClass->allowsUnsafe();
+
+    if (shouldDiagnose) {
+      diagnoseUnsafeUse(UnsafeUse::forOverride(override, base));
+    }
+  }
   /// Check attributes associated with the base; some may need to merged with
   /// or checked against attributes in the overriding declaration.
   AttributeOverrideChecker attrChecker(base, override);

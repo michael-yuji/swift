@@ -1188,6 +1188,7 @@ public:
 
       if (resultSchema.requiresIndirect() ||
           errorSchema.shouldReturnTypedErrorIndirectly() ||
+          outConv.hasIndirectSILResults() ||
           outConv.hasIndirectSILErrorResults()) {
         auto *typedErrorResultPtr = origParams.claimNext();
         args.add(typedErrorResultPtr);
@@ -1378,6 +1379,7 @@ public:
 
       if (resultSchema.requiresIndirect() ||
           errorSchema.shouldReturnTypedErrorIndirectly() ||
+          outConv.hasIndirectSILResults() ||
           outConv.hasIndirectSILErrorResults()) {
         auto *typedErrorResultPtr = origParams.claimNext();
         args.add(typedErrorResultPtr);
@@ -1698,7 +1700,7 @@ static llvm::Value *emitPartialApplicationForwarder(
   if (staticFnPtr)
     FnName = staticFnPtr->getName(IGM);
 
-  IRGenMangler Mangler;
+  IRGenMangler Mangler(IGM.Context);
   std::string thunkName = Mangler.manglePartialApplyForwarder(FnName);
 
   // FIXME: Maybe cache the thunk by function and closure types?.

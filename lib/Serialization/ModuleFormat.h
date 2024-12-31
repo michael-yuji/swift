@@ -58,7 +58,7 @@ const uint16_t SWIFTMODULE_VERSION_MAJOR = 0;
 /// describe what change you made. The content of this comment isn't important;
 /// it just ensures a conflict if two people change the module format.
 /// Don't worry about adhering to the 80-column limit for this line.
-const uint16_t SWIFTMODULE_VERSION_MINOR = 903; // @main attribute moved
+const uint16_t SWIFTMODULE_VERSION_MINOR = 909; // @abi attribute
 
 /// A standard hash seed used for all string hashes in a serialized module.
 ///
@@ -1158,7 +1158,8 @@ namespace input_block {
 
   using ModuleInterfaceLayout = BCRecordLayout<
     MODULE_INTERFACE_PATH,
-    BCBlob // file path
+    BCFixed<1>, // SDK-relative?
+    BCBlob      // file path
   >;
 
 }
@@ -1225,6 +1226,12 @@ namespace decls_block {
     ERROR_FLAG
   >;
 
+  /// A field marking a decl as being ABI-only and pointing to its API counterpart.
+  using ABIOnlyCounterpartLayout = BCRecordLayout<
+    ABI_ONLY_COUNTERPART,
+    DeclIDField // API decl
+  >;
+
   /// A placeholder for invalid types
   TYPE_LAYOUT(ErrorTypeLayout,
     ERROR_TYPE,
@@ -1246,10 +1253,10 @@ namespace decls_block {
   TYPE_LAYOUT(TypeAliasTypeLayout,
     NAME_ALIAS_TYPE,
     DeclIDField,           // typealias decl
+    TypeIDField,           // original underlying type
+    TypeIDField,           // substituted underlying type
     TypeIDField,           // parent type
-    TypeIDField,           // underlying type
-    TypeIDField,           // substituted type
-    SubstitutionMapIDField // substitution map
+    BCArray<TypeIDField>   // generic arguments
   );
 
   TYPE_LAYOUT(GenericTypeParamTypeLayout,
@@ -1312,7 +1319,8 @@ namespace decls_block {
                      BCFixed<1>,              // isolated
                      BCFixed<1>,              // noDerivative?
                      BCFixed<1>,              // compileTimeConst
-                     BCFixed<1>               // sending
+                     BCFixed<1>,              // sending
+                     BCFixed<1>               // addressable
                      >;
 
   TYPE_LAYOUT(MetatypeTypeLayout,
@@ -2269,6 +2277,12 @@ namespace decls_block {
                      BCArray<BCFixed<1>> // concatenated param indices
                      >;
 
+  using SafeDeclAttrLayout = BCRecordLayout<
+    Safe_DECL_ATTR,
+    BCFixed<1>, // implicit flag
+    BCBlob      // message
+  >;
+
   using AbstractClosureExprLayout = BCRecordLayout<
     ABSTRACT_CLOSURE_EXPR_CONTEXT,
     TypeIDField, // type
@@ -2339,6 +2353,12 @@ namespace decls_block {
     BCFixed<2>  // exclusivity mode
   >;
 
+  using ABIDeclAttrLayout = BCRecordLayout<
+    ABI_DECL_ATTR,
+    BCFixed<1>, // implicit flag
+    DeclIDField // ABI decl
+  >;
+
   using AvailableDeclAttrLayout = BCRecordLayout<
     Available_DECL_ATTR,
     BCFixed<1>, // implicit flag
@@ -2352,7 +2372,6 @@ namespace decls_block {
     BC_AVAIL_TUPLE, // Deprecated
     BC_AVAIL_TUPLE, // Obsoleted
     BCVBR<5>,    // platform
-    DeclIDField, // rename declaration (if any)
     BCVBR<5>,    // number of bytes in message string
     BCVBR<5>,    // number of bytes in rename string
     BCBlob       // message, followed by rename

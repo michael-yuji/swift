@@ -212,7 +212,7 @@ namespace {
 
       auto &mangledName = MangledNameCache[nominal];
       if (mangledName.empty())
-        mangledName = Mangle::ASTMangler().mangleNominalType(nominal);
+        mangledName = Mangle::ASTMangler(nominal->getASTContext()).mangleNominalType(nominal);
 
       assert(llvm::isUInt<31>(mangledName.size()));
       if (dataToWrite)
@@ -960,6 +960,9 @@ void Serializer::writeBlockInfoBlock() {
   BLOCK_RECORD(sil_block, SIL_PACK_ELEMENT_SET);
   BLOCK_RECORD(sil_block, SIL_DEBUG_SCOPE);
   BLOCK_RECORD(sil_block, SIL_DEBUG_SCOPE_REF);
+  BLOCK_RECORD(sil_block, SIL_SOURCE_LOC);
+  BLOCK_RECORD(sil_block, SIL_SOURCE_LOC_REF);
+
 
   BLOCK(SIL_INDEX_BLOCK);
   BLOCK_RECORD(sil_index_block, SIL_FUNC_NAMES);
@@ -1352,7 +1355,8 @@ void Serializer::writeInputBlock() {
   }
 
   if (!Options.ModuleInterface.empty())
-    ModuleInterface.emit(ScratchRecord, Options.ModuleInterface);
+    ModuleInterface.emit(ScratchRecord, Options.IsInterfaceSDKRelative,
+                         Options.ModuleInterface);
 
   SmallVector<ExternalMacroPlugin> macros;
   M->getExternalMacros(macros);
@@ -2881,6 +2885,15 @@ class Serializer::DeclSerializer : public DeclVisitor<DeclSerializer> {
   }
 #include "swift/AST/DeclAttr.def"
 
+    case DeclAttrKind::ABI: {
+      auto *theAttr = cast<ABIAttr>(DA);
+      auto abbrCode = S.DeclTypeAbbrCodes[ABIDeclAttrLayout::Code];
+      auto abiDeclID = S.addDeclRef(theAttr->abiDecl);
+      ABIDeclAttrLayout::emitRecord(S.Out, S.ScratchRecord, abbrCode,
+                                    theAttr->isImplicit(), abiDeclID);
+      return;
+    }
+
     case DeclAttrKind::SILGenName: {
       auto *theAttr = cast<SILGenNameAttr>(DA);
       auto abbrCode = S.DeclTypeAbbrCodes[SILGenNameDeclAttrLayout::Code];
@@ -3038,7 +3051,12 @@ class Serializer::DeclSerializer : public DeclVisitor<DeclSerializer> {
       ENCODE_VER_TUPLE(Deprecated, theAttr->Deprecated)
       ENCODE_VER_TUPLE(Obsoleted, theAttr->Obsoleted)
 
-      auto renameDeclID = S.addDeclRef(theAttr->RenameDecl);
+      assert(theAttr->Rename.empty() || !theAttr->hasCachedRenamedDecl());
+
+      bool isPackageDescriptionVersionSpecific =
+          theAttr->getPlatformAgnosticAvailability() ==
+          PlatformAgnosticAvailabilityKind::PackageDescriptionVersionSpecific;
+
       llvm::SmallString<32> blob;
       blob.append(theAttr->Message);
       blob.append(theAttr->Rename);
@@ -3049,14 +3067,13 @@ class Serializer::DeclSerializer : public DeclVisitor<DeclSerializer> {
           theAttr->isUnconditionallyUnavailable(),
           theAttr->isUnconditionallyDeprecated(),
           theAttr->isNoAsync(),
-          theAttr->isPackageDescriptionVersionSpecific(),
+          isPackageDescriptionVersionSpecific,
           theAttr->isSPI(),
           theAttr->isForEmbedded(),
           LIST_VER_TUPLE_PIECES(Introduced),
           LIST_VER_TUPLE_PIECES(Deprecated),
           LIST_VER_TUPLE_PIECES(Obsoleted),
           static_cast<unsigned>(theAttr->getPlatform()),
-          renameDeclID,
           theAttr->Message.size(),
           theAttr->Rename.size(),
           blob);
@@ -3369,6 +3386,15 @@ class Serializer::DeclSerializer : public DeclVisitor<DeclSerializer> {
       NonisolatedDeclAttrLayout::emitRecord(S.Out, S.ScratchRecord, abbrCode,
                                             theAttr->isUnsafe(),
                                             theAttr->isImplicit());
+      return;
+    }
+
+    case DeclAttrKind::Safe: {
+      auto *theAttr = cast<SafeAttr>(DA);
+      auto abbrCode = S.DeclTypeAbbrCodes[SafeDeclAttrLayout::Code];
+      SafeDeclAttrLayout::emitRecord(S.Out, S.ScratchRecord, abbrCode,
+                                     theAttr->isImplicit(),
+                                     theAttr->message);
       return;
     }
 
@@ -3994,6 +4020,10 @@ public:
 
     writeDeserializationSafety(D);
 
+    auto abiRole = ABIRoleInfo(D);
+    if (!abiRole.providesAPI())
+      writeABIOnlyCounterpart(abiRole.getCounterpartUnchecked());
+
     // Emit attributes (if any).
     for (auto Attr : D->getAttrs())
       writeDeclAttribute(D, Attr);
@@ -4012,6 +4042,13 @@ public:
     using namespace decls_block;
     unsigned abbrCode = S.DeclTypeAbbrCodes[ErrorFlagLayout::Code];
     ErrorFlagLayout::emitRecord(S.Out, S.ScratchRecord, abbrCode);
+  }
+
+  void writeABIOnlyCounterpart(const Decl *counterpart) {
+    using namespace decls_block;
+    unsigned abbrCode = S.DeclTypeAbbrCodes[ABIOnlyCounterpartLayout::Code];
+    ABIOnlyCounterpartLayout::emitRecord(S.Out, S.ScratchRecord, abbrCode,
+                                         S.addDeclRef(counterpart));
   }
 
   void noteUseOfExportedPrespecialization(const AbstractFunctionDecl *afd) {
@@ -5443,6 +5480,10 @@ public:
     llvm_unreachable("error union types do not persist in the AST");
   }
 
+  void visitLocatableType(const LocatableType *) {
+    llvm_unreachable("locatable types do not persist in the AST");
+  }
+
   void visitBuiltinTypeImpl(Type ty) {
     using namespace decls_block;
     TypeAliasDecl *typeAlias =
@@ -5475,17 +5516,21 @@ public:
 
   void visitTypeAliasType(const TypeAliasType *alias) {
     using namespace decls_block;
+
     const TypeAliasDecl *typeAlias = alias->getDecl();
-    auto underlyingType = typeAlias->getUnderlyingType();
+    SmallVector<TypeID, 8> genericArgIDs;
+
+    for (auto next : alias->getDirectGenericArgs())
+      genericArgIDs.push_back(S.addTypeRef(next));
 
     unsigned abbrCode = S.DeclTypeAbbrCodes[TypeAliasTypeLayout::Code];
     TypeAliasTypeLayout::emitRecord(
         S.Out, S.ScratchRecord, abbrCode,
         S.addDeclRef(typeAlias, /*allowTypeAliasXRef*/true),
-        S.addTypeRef(alias->getParent()),
-        S.addTypeRef(underlyingType),
+        S.addTypeRef(typeAlias->getUnderlyingType()),
         S.addTypeRef(alias->getSinglyDesugaredType()),
-        S.addSubstitutionMapRef(alias->getSubstitutionMap()));
+        S.addTypeRef(alias->getParent()),
+        genericArgIDs);
   }
 
   template <typename Layout>
@@ -5699,7 +5744,8 @@ public:
           S.addTypeRef(param.getPlainType()), paramFlags.isVariadic(),
           paramFlags.isAutoClosure(), paramFlags.isNonEphemeral(), rawOwnership,
           paramFlags.isIsolated(), paramFlags.isNoDerivative(),
-          paramFlags.isCompileTimeConst(), paramFlags.isSending());
+          paramFlags.isCompileTimeConst(), paramFlags.isSending(),
+          paramFlags.isAddressable());
     }
   }
 
@@ -6185,6 +6231,7 @@ void Serializer::writeAllDeclsAndTypes() {
 
   registerDeclTypeAbbr<ErrorFlagLayout>();
   registerDeclTypeAbbr<ErrorTypeLayout>();
+  registerDeclTypeAbbr<ABIOnlyCounterpartLayout>();
 
   registerDeclTypeAbbr<ClangTypeLayout>();
 
@@ -6647,7 +6694,7 @@ static void recordDerivativeFunctionConfig(
     Serializer &S, const AbstractFunctionDecl *AFD,
     Serializer::UniquedDerivativeFunctionConfigTable &derivativeConfigs) {
   auto &ctx = AFD->getASTContext();
-  Mangle::ASTMangler Mangler;
+  Mangle::ASTMangler Mangler(AFD->getASTContext());
   for (auto *attr : AFD->getAttrs().getAttributes<DifferentiableAttr>()) {
     auto mangledName = ctx.getIdentifier(Mangler.mangleDeclAsUSR(AFD, ""));
     derivativeConfigs[mangledName].insert(
@@ -6685,7 +6732,7 @@ static void collectInterestingNestedDeclarations(
 
       if (auto owningType = func->getDeclContext()->getSelfNominalTypeDecl()) {
         if (func->isObjC()) {
-          Mangle::ASTMangler mangler;
+          Mangle::ASTMangler mangler(func->getASTContext());
           std::string ownerName = mangler.mangleNominalType(owningType);
           assert(!ownerName.empty() && "Mangled type came back empty!");
 
@@ -6859,7 +6906,6 @@ void Serializer::writeAST(ModuleOrSourceFile DC) {
         continue;
 
       hasLocalTypes = true;
-      Mangle::ASTMangler Mangler;
 
       std::string MangledName =
           evaluateOrDefault(M->getASTContext().evaluator,
@@ -6891,7 +6937,7 @@ void Serializer::writeAST(ModuleOrSourceFile DC) {
         continue;
 
       hasOpaqueReturnTypes = true;
-      Mangle::ASTMangler Mangler;
+      Mangle::ASTMangler Mangler(OTD->getASTContext());
       auto MangledName = Mangler.mangleOpaqueTypeDecl(OTD);
       opaqueReturnTypeGenerator.insert(MangledName, addDeclRef(OTD));
     }

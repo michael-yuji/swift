@@ -1230,6 +1230,18 @@ static bool hasLessAccessibleSetter(const AbstractStorageDecl *ASD) {
   return ASD->getSetterFormalAccess() < ASD->getFormalAccess();
 }
 
+bool canPrintSyntheticSILGenName(const Decl *D) {
+  ASSERT(!D->getAttrs().hasAttribute<SILGenNameAttr>());
+
+  // Only print on functions, and only those functions with no barriers to use.
+  if (auto FD = dyn_cast<AbstractFunctionDecl>(D); !FD
+        || FD->getAttrs().hasAttribute<BackDeployedAttr>()
+        || FD->getOpaqueResultTypeDecl())
+    return false;
+
+  return true;
+}
+
 void PrintAST::printAttributes(const Decl *D) {
   if (Options.SkipAttributes)
     return;
@@ -1246,6 +1258,27 @@ void PrintAST::printAttributes(const Decl *D) {
   // ExcludeCustomAttrList stores instances of attributes, which are specific
   // for each decl They cannot be shared across different decls.
   assert(Options.ExcludeCustomAttrList.empty());
+
+  if (Options.PrintSyntheticSILGenName
+        && !D->getAttrs().hasAttribute<SILGenNameAttr>()) {
+    if (canPrintSyntheticSILGenName(D)) {
+      auto mangledName = Mangle::ASTMangler(D->getASTContext())
+                            .mangleAnyDecl(cast<ValueDecl>(D), /*prefix=*/true,
+                                           /*respectOriginallyDefinedIn=*/true);
+      Printer.printAttrName("@_silgen_name");
+      Printer << "(";
+      Printer.printEscapedStringLiteral(mangledName);
+      Printer << ")\n";
+    }
+    else {
+      Printer.printAttrName("@available");
+      Printer << "(*, unavailable, message: ";
+      Printer.printEscapedStringLiteral(
+          "this compiler cannot match the ABI specified by the @abi attribute");
+      Printer << ")\n";
+      Options.ExcludeAttrList.push_back(DeclAttrKind::Available);
+    }
+  }
 
   if (Options.PrintImplicitAttrs) {
 
@@ -2150,10 +2183,8 @@ bool ShouldPrintChecker::shouldPrint(const Pattern *P,
 }
 
 bool isNonSendableExtension(const Decl *D) {
-  ASTContext &ctx = D->getASTContext();
-
   const ExtensionDecl *ED = dyn_cast<ExtensionDecl>(D);
-  if (!ED || !ED->getAttrs().isUnavailable(ctx))
+  if (!ED || !ED->isUnavailable())
     return false;
 
   auto nonSendable =
@@ -2193,8 +2224,7 @@ bool ShouldPrintChecker::shouldPrint(const Decl *D,
         return false;
     }
 
-    if (Options.SkipUnavailable &&
-        D->getAttrs().isUnavailable(D->getASTContext()))
+    if (Options.SkipUnavailable && D->isUnavailable())
       return false;
   }
 
@@ -3142,6 +3172,16 @@ suppressingFeatureCoroutineAccessors(PrintOptions &options,
   action();
 }
 
+static void
+suppressingFeatureABIAttribute(PrintOptions &options,
+                               llvm::function_ref<void()> action) {
+  llvm::SaveAndRestore<bool> scope(options.PrintSyntheticSILGenName, true);
+  unsigned originalExcludeAttrCount = options.ExcludeAttrList.size();
+  options.ExcludeAttrList.push_back(DeclAttrKind::ABI);
+  action();
+  options.ExcludeAttrList.resize(originalExcludeAttrCount);
+}
+
 /// Suppress the printing of a particular feature.
 static void suppressingFeature(PrintOptions &options, Feature feature,
                                llvm::function_ref<void()> action) {
@@ -3913,6 +3953,8 @@ void PrintAST::printOneParameter(const ParamDecl *param,
 void PrintAST::printParameterList(ParameterList *PL,
                                   ArrayRef<AnyFunctionType::Param> params,
                                   bool isAPINameByDefault) {
+  llvm::SaveAndRestore<bool> scope(Options.PrintSyntheticSILGenName, false);
+
   Printer.printStructurePre(PrintStructureKind::FunctionParameterList);
   SWIFT_DEFER {
     Printer.printStructurePost(PrintStructureKind::FunctionParameterList);
@@ -5346,6 +5388,9 @@ void PrintAST::visitLinearToDifferentiableFunctionExpr(swift::LinearToDifferenti
 void PrintAST::visitActorIsolationErasureExpr(ActorIsolationErasureExpr *expr) {
 }
 
+void PrintAST::visitUnsafeCastExpr(UnsafeCastExpr *expr) {
+}
+
 void PrintAST::visitExtractFunctionIsolationExpr(ExtractFunctionIsolationExpr *expr) {
   visit(expr->getFunctionExpr());
   Printer << ".isolation";
@@ -6007,6 +6052,10 @@ public:
       else
         printGenericArgs(T->getExpandedGenericArgs());
     }
+  }
+
+  void visitLocatableType(LocatableType *T) {
+    visit(T->getSinglyDesugaredType());
   }
 
   void visitPackType(PackType *T) {

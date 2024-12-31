@@ -161,10 +161,17 @@ enum class NameLookupFlags {
   /// Whether to include members that would otherwise be filtered out because
   /// they come from a module that has not been imported.
   IgnoreMissingImports = 1 << 4,
+  /// If @abi attributes are present, return the decls representing the ABI,
+  /// not the API.
+  ABIProviding = 1 << 5,
+
+  // Reminder: If you add a flag, make sure you update simple_display() below
 };
 
 /// A set of options that control name lookup.
 using NameLookupOptions = OptionSet<NameLookupFlags>;
+
+void simple_display(llvm::raw_ostream &out, NameLookupOptions opts);
 
 inline NameLookupOptions operator|(NameLookupFlags flag1,
                                    NameLookupFlags flag2) {
@@ -932,7 +939,7 @@ bool isDeclRefinementOf(ValueDecl *declA, ValueDecl *declB);
 /// the given set of declarations.
 Expr *buildRefExpr(ArrayRef<ValueDecl *> Decls, DeclContext *UseDC,
                    DeclNameLoc NameLoc, bool Implicit,
-                   FunctionRefKind functionRefKind);
+                   FunctionRefInfo functionRefInfo);
 /// @}
 
 /// Retrieve a specific, known protocol.

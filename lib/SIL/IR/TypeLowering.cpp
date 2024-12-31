@@ -44,6 +44,7 @@
 #include "swift/SIL/SILModule.h"
 #include "swift/SIL/Test.h"
 #include "clang/AST/Type.h"
+#include "clang/AST/Decl.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 
@@ -2508,6 +2509,15 @@ namespace {
         properties.setLexical(IsLexical);
       }
 
+      if (auto *clangDecl = D->getClangDecl()) {
+        if (auto *recordDecl = dyn_cast<clang::RecordDecl>(clangDecl)) {
+          // C unions are imported as opaque types. Therefore we have to assume
+          // that a union contains a pointer.
+          if (recordDecl->isOrContainsUnion())
+            properties.setIsOrContainsRawPointer();
+        }
+      }
+
       // [is_or_contains_pack_unsubstituted] Visit the fields of the
       // unsubstituted type to find pack types which would be substituted away.
       for (auto field : D->getStoredProperties()) {
@@ -3012,6 +3022,9 @@ bool TypeConverter::visitAggregateLeaves(
     std::optional<unsigned> index;
     std::tie(ty, origTy, field, index) = popFromWorklist();
     assert(!field || !index && "both field and index!?");
+    if (auto origEltTy = origTy.getVanishingTupleElementPatternType()) {
+      origTy = *origEltTy;
+    }
     if (isAggregate(ty) && !isLeafAggregate(ty, origTy, field, index)) {
       if (auto packTy = dyn_cast<SILPackType>(ty)) {
         for (auto packIndex : indices(packTy->getElementTypes())) {

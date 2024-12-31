@@ -66,6 +66,7 @@ namespace swift {
   class AccessorDecl;
   class ApplyExpr;
   class AvailabilityRange;
+  class AvailabilityDomain;
   class GenericEnvironment;
   class ArchetypeType;
   class ASTContext;
@@ -94,6 +95,7 @@ namespace swift {
   class MacroDefinition;
   class ModuleDecl;
   class NamedPattern;
+  enum NLOptions : unsigned;
   class EnumCaseDecl;
   class EnumElementDecl;
   class ParameterList;
@@ -1021,6 +1023,17 @@ public:
   /// attribute macro expansion.
   DeclAttributes getSemanticAttrs() const;
 
+  /// Register the relationship between \c this and \p attr->abiDecl , assuming
+  /// that \p attr is attached to \c this . This is necessary for
+  /// \c ABIRoleInfo::ABIRoleInfo() to determine that \c attr->abiDecl
+  /// is ABI-only and locate its API counterpart.
+  void recordABIAttr(ABIAttr *attr);
+
+  /// Set this declaration's attributes to the specified attribute list,
+  /// applying any post-processing logic appropriate for attributes parsed
+  /// from source code.
+  void attachParsedAttrs(DeclAttributes attrs);
+
   /// True if this declaration provides an implementation for an imported
   /// Objective-C declaration. This implies various restrictions and special
   /// behaviors for it and, if it's an extension, its members.
@@ -1189,6 +1202,10 @@ public:
   /// Whether this declaration is considered "unsafe", i.e., should not be
   /// used in a "safe" dialect.
   bool isUnsafe() const;
+
+  /// Whether this declaration explicitly states that it is allowed to contain
+  /// unsafe code.
+  bool allowsUnsafe() const;
 
 private:
   bool isUnsafeComputed() const {
@@ -1378,41 +1395,83 @@ public:
   /// @_originalDefinedIn attribute, this function returns this module name.
   StringRef getAlternateModuleName() const;
 
-  // Is this Decl an SPI? It can be directly marked with @_spi or is defined in
-  // an @_spi context.
+  /// Is this Decl an SPI? It can be directly marked with @_spi or is defined in
+  /// an @_spi context.
   bool isSPI() const;
 
+  /// Returns true if the attribute providing the platform availability
+  /// introduction for this decl is an `@_spi_available` attribute.
   bool isAvailableAsSPI() const;
 
   /// Determine whether this Decl has either Private or FilePrivate access,
   /// and its DeclContext does not.
   bool isOutermostPrivateOrFilePrivateScope() const;
 
-  /// Retrieve the @available attribute that provides the OS version range that
-  /// this declaration is available in.
-  ///
-  /// This attribute may come from an enclosing decl since availability is
-  /// inherited. The second member of the returned pair is the decl that owns
-  /// the attribute.
-  std::optional<std::pair<const AvailableAttr *, const Decl *>>
-  getSemanticAvailableRangeAttr() const;
+  /// Returns an iterable list of the valid `AvailableAttr` and
+  /// `AvailabilityDomain` pairs. Unless \p includeInactive is true, attributes
+  /// that are considered inactive for the compilation context are filtered out.
+  SemanticAvailableAttributes
+  getSemanticAvailableAttrs(bool includeInactive = true) const;
 
-  /// Retrieve the @available attribute that makes this declaration unavailable,
-  /// if any. If \p ignoreAppExtensions is true then attributes for app
-  /// extension platforms are ignored.
+  /// Returns the SemanticAvailableAttr associated with the given
+  /// `AvailableAttr` that is attached to this decl. Returns `std::nullopt` if a
+  /// valid semantic version of the attribute cannot be constructed (e.g. the
+  /// domain cannot be resolved).
+  std::optional<SemanticAvailableAttr>
+  getSemanticAvailableAttr(const AvailableAttr *attr) const;
+
+  /// Returns the active platform-specific `@available` attribute for this decl.
+  /// There may be multiple `@available` attributes that are relevant to the
+  /// current platform, but the returned one has the highest priority.
+  std::optional<SemanticAvailableAttr> getActiveAvailableAttrForCurrentPlatform(
+      bool ignoreAppExtensions = false) const;
+
+  /// Returns true if the declaration is deprecated at the current deployment
+  /// target.
+  bool isDeprecated() const { return getDeprecatedAttr().has_value(); }
+
+  /// Returns the first `@available` attribute that indicates that this decl
+  /// is deprecated on current deployment target, or `nullptr` otherwise.
+  std::optional<SemanticAvailableAttr> getDeprecatedAttr() const;
+
+  /// Returns the first `@available` attribute that indicates that this decl
+  /// will be deprecated in the future, or `nullptr` otherwise.
+  std::optional<SemanticAvailableAttr> getSoftDeprecatedAttr() const;
+
+  /// Returns the first @available attribute that indicates this decl is
+  /// unavailable from asynchronous contexts, or `nullptr` otherwise.
+  std::optional<SemanticAvailableAttr> getNoAsyncAttr() const;
+
+  /// Returns true if the decl has been marked unavailable in the Swift language
+  /// version that is currently active.
+  bool isUnavailableInCurrentSwiftVersion() const;
+
+  /// Returns true if the decl is always unavailable in the current compilation
+  /// context. For example, the decl could be marked explicitly unavailable on
+  /// either the current platform or in the current language mode. Returns false
+  /// for declarations that are only _potentially_ unavailable because of a
+  /// condition that could be satisfied at runtime (like requiring an operating
+  /// system version that is higher than the current deployment target).
   ///
-  /// This attribute may come from an enclosing decl since availability is
-  /// inherited. The second member of the returned pair is the decl that owns
-  /// the attribute.
-  ///
-  /// Note that this notion of unavailability is broader than that which is
-  /// checked by \c AvailableAttr::isUnavailable.
-  std::optional<std::pair<const AvailableAttr *, const Decl *>>
-  getSemanticUnavailableAttr(bool ignoreAppExtensions = false) const;
+  /// Note that this query only considers the attributes that are attached
+  /// directly to this decl (or the extension it is declared in, if applicable).
+  bool isUnavailable() const { return getUnavailableAttr().has_value(); }
+
+  /// If the decl is always unavailable in the current compilation
+  /// context, returns the attribute attached to the decl (or its parent
+  /// extension) that makes it unavailable.
+  std::optional<SemanticAvailableAttr>
+  getUnavailableAttr(bool ignoreAppExtensions = false) const;
+
+  /// Returns true if the decl is effectively always unavailable in the current
+  /// compilation context. This query differs from \c isUnavailable() because it
+  /// takes the availability of parent declarations into account.
+  bool isSemanticallyUnavailable() const;
 
   /// Returns true if code associated with this declaration should be considerd
   /// unreachable at runtime because the declaration is unavailable in all
-  /// execution contexts in which the code may run.
+  /// execution contexts in which the code may run. This result takes the
+  /// availability of parent declarations into account.
   bool isUnreachableAtRuntime() const;
 
   /// Returns true if this declaration should be considered available during
@@ -1874,6 +1933,7 @@ class ExtensionDecl final : public GenericContext, public Decl,
   friend class Decl;
 public:
   using Decl::getASTContext;
+  using Decl::allowsUnsafe;
 
   /// Create a new extension declaration.
   static ExtensionDecl *create(ASTContext &ctx, SourceLoc extensionLoc,
@@ -2609,6 +2669,11 @@ public:
   /// Returns \c true if this pattern binding was created by the debugger.
   bool isDebuggerBinding() const { return Bits.PatternBindingDecl.IsDebugger; }
 
+  /// Returns the \c VarDecl in this PBD at the same offset in the same
+  /// pattern entry as \p otherVar is in its PBD, or \c nullptr if this PBD is
+  /// too different from \p otherVar 's to find an equivalent variable.
+  VarDecl *getVarAtSimilarStructuralPosition(VarDecl *otherVar);
+
   static bool classof(const Decl *D) {
     return D->getKind() == DeclKind::PatternBinding;
   }
@@ -3262,6 +3327,15 @@ public:
   /// @_dynamicReplacement(for: ...), compute the original declaration
   /// that this declaration dynamically replaces.
   ValueDecl *getDynamicallyReplacedDecl() const;
+
+  /// Performs a request to look up the decl that this decl has been renamed to
+  /// if `attr` indicates that it has been renamed.
+  ValueDecl *getRenamedDecl(const AvailableAttr *attr) const;
+
+  /// Directly sets the renamed decl corresponding to `attr`. This should only
+  /// be used when synthesizing an `AvailableAttr`, before calling
+  /// `getRenamedDecl()`.
+  void setRenamedDecl(const AvailableAttr *attr, ValueDecl *renameDecl) const;
 };
 
 /// This is a common base class for declarations which declare a type.
@@ -3337,6 +3411,7 @@ public:
   using DeclContext::operator new;
   using DeclContext::operator delete;
   using TypeDecl::getDeclaredInterfaceType;
+  using Decl::allowsUnsafe;
 
   static bool classof(const DeclContext *C) {
     if (auto D = C->getAsDecl())
@@ -3445,7 +3520,7 @@ public:
   ///
   /// This is more complex than just checking `getNamingDecl` because the
   /// function could also be the getter of a storage declaration.
-  bool isOpaqueReturnTypeOfFunction(const AbstractFunctionDecl *func) const;
+  bool isOpaqueReturnTypeOf(const Decl *owner) const;
 
   /// Get the ordinal of the anonymous opaque parameter of this decl with type
   /// repr `repr`, as introduce implicitly by an occurrence of "some" in return
@@ -4286,6 +4361,9 @@ public:
     IncludeAttrImplements = 1 << 0,
     /// Whether to exclude members of macro expansions.
     ExcludeMacroExpansions = 1 << 1,
+    /// If @abi attributes are present, return the decls representing the ABI,
+    /// not the API.
+    ABIProviding = 1 << 2,
   };
 
   /// Find all of the declarations with the given name within this nominal type
@@ -6770,6 +6848,9 @@ class ParamDecl : public VarDecl {
 
     /// Whether or not this parameter is 'isolated'.
     IsIsolated = 1 << 2,
+    
+    /// Whether this parameter is `@_addressable`.
+    IsAddressable = 1 << 3,
 
     /// Whether or not this parameter is 'sending'.
     IsSending = 1 << 4,
@@ -7058,6 +7139,18 @@ public:
       addFlag(Flag::IsSending);
     else
       removeFlag(Flag::IsSending);
+  }
+
+  /// Whether or not this parameter is marked with '@_addressable'.
+  bool isAddressable() const {
+    return getOptions().contains(Flag::IsAddressable);
+  }
+  
+  void setAddressable(bool value = true) {
+    if (value)
+      addFlag(Flag::IsAddressable);
+    else
+      removeFlag(Flag::IsAddressable);
   }
 
   /// Whether or not this parameter is marked with '_const'.
@@ -9704,6 +9797,126 @@ const ParamDecl *getParameterAt(const ValueDecl *source, unsigned index);
 /// Retrieve parameter declaration from the given source at given index, or
 /// nullptr if the source does not have a parameter list.
 const ParamDecl *getParameterAt(const DeclContext *source, unsigned index);
+
+class ABIRole {
+public:
+  enum Value : uint8_t {
+    Neither = 0,
+    ProvidesABI = 1 << 0,
+    ProvidesAPI = 1 << 1,
+    Either = ProvidesABI | ProvidesAPI,
+  };
+
+  Value value;
+
+  ABIRole(Value value)
+    : value(value)
+  { }
+
+  ABIRole()
+    : ABIRole(Neither)
+  { }
+
+  explicit ABIRole(NLOptions opts);
+
+  template<typename FlagType>
+  explicit ABIRole(OptionSet<FlagType> flags)
+    : value(flags.contains(FlagType::ABIProviding) ? ProvidesABI : ProvidesAPI)
+  { }
+
+  inline ABIRole operator|(ABIRole rhs) const {
+    return ABIRole(ABIRole::Value(value | rhs.value));
+  }
+  inline ABIRole &operator|=(ABIRole rhs) {
+    value = ABIRole::Value(value | rhs.value);
+    return *this;
+  }
+  inline ABIRole operator&(ABIRole rhs) const {
+    return ABIRole(ABIRole::Value(value & rhs.value));
+  }
+  inline ABIRole &operator&=(ABIRole rhs) {
+    value = ABIRole::Value(value & rhs.value);
+    return *this;
+  }
+  inline ABIRole operator~() const {
+    return ABIRole(ABIRole::Value(~value));
+  }
+
+  operator bool() const {
+    return value != Neither;
+  }
+};
+
+namespace abi_role_detail {
+
+using Storage = llvm::PointerIntPair<Decl *, 2, ABIRole::Value>;
+Storage computeStorage(Decl *decl);
+
+}
+
+/// Specifies the \c ABIAttr -related behavior of this declaration
+/// and provides access to its counterpart.
+///
+/// A given declaration may provide the API, the ABI, or both. If it provides
+/// API, the counterpart is the matching ABI-providing decl; if it provides
+/// ABI, the countepart is the matching API-providing decl. A declaration
+/// which provides both API and ABI is its own counterpart.
+///
+/// If the counterpart is \c nullptr , this indicates a fundamental mismatch
+/// between decl and counterpart. Sometimes this mismatch is a difference in
+/// decl kind; in these cases, \c getCounterpartUnchecked() will return the
+/// incorrect counterpart.
+template<typename SpecificDecl>
+class ABIRoleInfo {
+  friend abi_role_detail::Storage abi_role_detail::computeStorage(Decl *);
+
+  abi_role_detail::Storage counterpartAndFlags;
+
+  ABIRoleInfo(abi_role_detail::Storage storage)
+    : counterpartAndFlags(storage)
+  { }
+
+public:
+  explicit ABIRoleInfo(const SpecificDecl *decl)
+    : ABIRoleInfo(abi_role_detail::computeStorage(const_cast<SpecificDecl *>(decl)))
+  { }
+
+  Decl *getCounterpartUnchecked() const {
+    return counterpartAndFlags.getPointer();
+  }
+
+  SpecificDecl *getCounterpart() const {
+    return dyn_cast_or_null<SpecificDecl>(getCounterpartUnchecked());
+  }
+
+  ABIRole getRole() const {
+    return ABIRole(ABIRole::Value(counterpartAndFlags.getInt()));
+  }
+
+  bool matches(ABIRole desiredRole) const {
+    return getRole() & desiredRole;
+  }
+
+  template<typename Options>
+  bool matchesOptions(Options opts) const {
+    return matches(ABIRole(opts));
+  }
+
+  bool providesABI() const {
+    return matches(ABIRole::ProvidesABI);
+  }
+
+  bool providesAPI() const {
+    return matches(ABIRole::ProvidesAPI);
+  }
+
+  bool hasABIAttr() const {
+    return !providesABI();
+  }
+};
+
+template<typename SpecificDecl>
+ABIRoleInfo(const SpecificDecl *decl) -> ABIRoleInfo<SpecificDecl>;
 
 StringRef
 getAccessorNameForDiagnostic(AccessorDecl *accessor, bool article,

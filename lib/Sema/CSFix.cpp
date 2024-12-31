@@ -2249,10 +2249,15 @@ bool SpecifyBaseTypeForOptionalUnresolvedMember::diagnose(
 SpecifyBaseTypeForOptionalUnresolvedMember *
 SpecifyBaseTypeForOptionalUnresolvedMember::attempt(
     ConstraintSystem &cs, ConstraintKind kind, Type baseTy,
-    DeclNameRef memberName, FunctionRefKind functionRefKind,
+    DeclNameRef memberName, FunctionRefInfo functionRefInfo,
     MemberLookupResult result, ConstraintLocator *locator) {
 
   if (kind != ConstraintKind::UnresolvedValueMember)
+    return nullptr;
+
+  // Only diagnose for UnresolvedMemberExprs.
+  // TODO: We ought to support diagnosing EnumElementPatterns too.
+  if (!isExpr<UnresolvedMemberExpr>(locator->getAnchor()))
     return nullptr;
 
   // None or only one viable candidate, there is no ambiguity.
@@ -2264,7 +2269,7 @@ SpecifyBaseTypeForOptionalUnresolvedMember::attempt(
     return nullptr;
 
   // Don't diagnose for function members e.g. Foo? = .none(0).
-  if (functionRefKind != FunctionRefKind::Unapplied)
+  if (!functionRefInfo.isUnappliedBaseName())
     return nullptr;
 
   Type underlyingBaseType = baseTy->getMetatypeInstanceType();
@@ -2344,7 +2349,7 @@ SpecifyBaseTypeForOptionalUnresolvedMember::attempt(
 
   MemberLookupResult unwrappedResult =
       cs.performMemberLookup(kind, memberName, MetatypeType::get(unwrappedType),
-                             functionRefKind, locator,
+                             functionRefInfo, locator,
                              /*includeInaccessibleMembers*/ false);
   SmallVector<OverloadChoice, 4> unwrappedViableCandidates;
   filterViableCandidates(unwrappedResult.ViableCandidates,

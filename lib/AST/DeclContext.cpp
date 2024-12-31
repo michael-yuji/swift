@@ -306,7 +306,7 @@ DeclContext *DeclContext::getParentForLookup() const {
     // outer types.
     return getModuleScopeContext();
   }
-  if (isa<ProtocolDecl>(this) && getParent()->isGenericContext()) {
+  if (isUnsupportedNestedProtocol()) {
     // Protocols in generic contexts must not look in to their parents,
     // as the parents may contain types with inferred implicit
     // generic parameters not present in the protocol's generic signature.
@@ -869,6 +869,9 @@ unsigned DeclContext::printContext(raw_ostream &OS, const unsigned indent,
       }
       break;
     }
+    case InitializerKind::CustomAttribute:
+      OS << " CustomAttribute";
+      break;
     }
     break;
   }
@@ -1529,12 +1532,16 @@ bool DeclContext::isInSpecializeExtensionContext() const {
    return isSpecializeExtensionContext(this);
 }
 
+bool DeclContext::isUnsupportedNestedProtocol() const {
+  return isa<ProtocolDecl>(this) && getParent()->isGenericContext();
+}
+
 bool DeclContext::isAlwaysAvailableConformanceContext() const {
   auto *ext = dyn_cast<ExtensionDecl>(this);
   if (ext == nullptr)
     return true;
 
-  if (AvailableAttr::isUnavailable(ext))
+  if (ext->isUnavailable())
     return false;
 
   auto &ctx = getASTContext();
@@ -1545,4 +1552,11 @@ bool DeclContext::isAlwaysAvailableConformanceContext() const {
   auto deploymentTarget = AvailabilityRange::forDeploymentTarget(ctx);
 
   return deploymentTarget.isContainedIn(conformanceAvailability);
+}
+
+bool DeclContext::allowsUnsafe() const {
+  if (auto decl = getAsDecl())
+    return decl->allowsUnsafe();
+
+  return false;
 }

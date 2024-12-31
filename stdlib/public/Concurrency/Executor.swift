@@ -317,6 +317,7 @@ extension SerialExecutor {
 /// different objects, the executor must be referenced strongly by the
 /// actor.
 @available(SwiftStdlib 5.1, *)
+@unsafe
 @frozen
 public struct UnownedSerialExecutor: Sendable {
   @usableFromInline
@@ -541,7 +542,7 @@ internal final class DispatchQueueShim: @unchecked Sendable, SerialExecutor {
 #endif // SWIFT_CONCURRENCY_USES_DISPATCH
 
 
-@available(SwiftStdlib 5.6, *) // TODO: Clarify version
+@available(SwiftStdlib 6.1, *)
 @_silgen_name("swift_task_deinitOnExecutor")
 @usableFromInline
 internal func _deinitOnExecutor(_ object: __owned AnyObject,

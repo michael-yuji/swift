@@ -726,7 +726,7 @@ class SILPrinter : public SILInstructionVisitor<SILPrinter> {
       separator = " ";
     }
     if (!i.IsReborrow && i.OwnershipKind && *i.OwnershipKind != OwnershipKind::None) {
-      *this << separator << "@" << i.OwnershipKind.value() << " ";
+      *this << separator << "@" << i.OwnershipKind.value();
       separator = " ";
     }
     if (i.needPrintType) {
@@ -807,6 +807,10 @@ public:
     return {Ctx.getID(arg), arg->getType(), arg->getOwnershipKind(),
             arg->isReborrow(), arg->hasPointerEscape(),
             /*needPrintType=*/true};
+  }
+
+  void markBlockAsPrinted(const SILBasicBlock *block) {
+    printedBlocks.insert(block);
   }
 
   //===--------------------------------------------------------------------===//
@@ -932,7 +936,7 @@ public:
 #endif
 
   void print(const SILBasicBlock *BB) {
-    printedBlocks.insert(BB);
+    markBlockAsPrinted(BB);
 
     // Output uses for BB arguments. These are put into place as comments before
     // the block header.
@@ -2516,10 +2520,11 @@ public:
     PrintOptions QualifiedSILTypeOptions =
         PrintOptions::printQualifiedSILType();
     QualifiedSILTypeOptions.CurrentModule = WMI->getModule().getSwiftModule();
-    *this << "$" << WMI->getLookupType() << ", " << WMI->getMember() << " : ";
+    auto lookupType = WMI->getLookupType();
+    *this << "$" << lookupType << ", " << WMI->getMember() << " : ";
     WMI->getMember().getDecl()->getInterfaceType().print(
         PrintState.OS, QualifiedSILTypeOptions);
-    if (!WMI->getTypeDependentOperands().empty()) {
+    if ((getLocalArchetypeOf(lookupType) || lookupType->hasDynamicSelfType()) && !WMI->getTypeDependentOperands().empty()) {
       *this << ", ";
       *this << getIDAndForcedPrintedType(WMI->getTypeDependentOperands()[0].get());
     }
@@ -3677,6 +3682,7 @@ void SILGlobalVariable::print(llvm::raw_ostream &OS, bool Verbose) const {
     {
       SILPrintContext Ctx(OS);
       SILPrinter Printer(Ctx);
+      Printer.markBlockAsPrinted(&StaticInitializerBlock);
       for (const SILInstruction &I : StaticInitializerBlock) {
         Printer.print(&I);
       }

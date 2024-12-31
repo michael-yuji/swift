@@ -1193,8 +1193,7 @@ void swift::serialization::diagnoseSerializedASTLoadFailure(
                        moduleBufferID);
     break;
   case serialization::Status::NotInOSSA:
-    if (Ctx.SerializationOpts.ExplicitModuleBuild ||
-        !Ctx.SILOpts.EnableRecompilationToOSSAModule) {
+    if (Ctx.SerializationOpts.ExplicitModuleBuild) {
       Ctx.Diags.diagnose(diagLoc,
                          diag::serialization_non_ossa_module_incompatible,
                          ModuleName);
@@ -1852,7 +1851,7 @@ bool SerializedASTFile::isSystemModule() const {
 void SerializedASTFile::lookupValue(DeclName name, NLKind lookupKind,
                                     OptionSet<ModuleLookupFlags> Flags,
                                     SmallVectorImpl<ValueDecl*> &results) const{
-  File.lookupValue(name, results);
+  File.lookupValue(name, Flags, results);
 }
 
 StringRef

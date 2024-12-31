@@ -249,7 +249,7 @@ bool IsDefaultActorRequest::evaluate(
   if (foundExecutorPropertyImpl) {
     if (!isDefaultActor &&
         classDecl->getASTContext().LangOpts.isConcurrencyModelTaskToThread() &&
-        !AvailableAttr::isUnavailable(classDecl)) {
+        !classDecl->isUnavailable()) {
       classDecl->diagnose(
           diag::concurrency_task_to_thread_model_custom_executor,
           "task-to-thread concurrency model");
@@ -1644,9 +1644,6 @@ ReferencedActor ReferencedActor::forGlobalActor(VarDecl *actor,
   Kind kind = isMainActor(globalActor) ? MainActor : GlobalActor;
   return ReferencedActor(actor, isPotentiallyIsolated, kind, globalActor);
 }
-
-static ActorIsolation getActorIsolationForReference(
-    ValueDecl *decl, const DeclContext *fromDC);
 
 bool ReferencedActor::isKnownToBeLocal() const {
   switch (kind) {
@@ -3865,54 +3862,8 @@ namespace {
             unsatisfiedIsolation, setThrows, usesDistributedThunk);
       }
 
-      // Sendable checking for arguments is deferred to region isolation.
-
-      // FIXME: Defer sendable checking for result types to region isolation
-      // always.
-      //
-      // Check for sendability of the result type if we do not have a
-      // sending result.
-      if ((!ctx.LangOpts.hasFeature(Feature::RegionBasedIsolation) ||
-           !fnType->hasSendingResult())) {
-        assert(ctx.LangOpts.hasFeature(Feature::SendingArgsAndResults) &&
-               "SendingArgsAndResults should be enabled if RegionIsolation is "
-               "enabled");
-        // See if we are a autoclosure that has a direct callee that has the
-        // same non-transferred type value returned. If so, do not emit an
-        // error... we are going to emit an error on the call expr and do not
-        // want to emit the error twice.
-        auto willDoubleError = [&]() -> bool {
-          auto *autoclosure = dyn_cast<AutoClosureExpr>(apply->getFn());
-          if (!autoclosure)
-            return false;
-          auto *await =
-              dyn_cast<AwaitExpr>(autoclosure->getSingleExpressionBody());
-          if (!await)
-            return false;
-          auto *subCallExpr = dyn_cast<CallExpr>(await->getSubExpr());
-          if (!subCallExpr)
-            return false;
-          return subCallExpr->getType().getPointer() ==
-                 fnType->getResult().getPointer();
-        };
-
-        if (!willDoubleError()) {
-          if (calleeDecl) {
-            return diagnoseNonSendableTypes(fnType->getResult(), getDeclContext(),
-                /*inDerivedConformance*/ Type(),
-                apply->getLoc(),
-                diag::non_sendable_result_into_actor,
-                calleeDecl,
-                *unsatisfiedIsolation);
-          }
-
-          return diagnoseNonSendableTypes(fnType->getResult(), getDeclContext(),
-              /*inDerivedConformance*/ Type(),
-              apply->getLoc(),
-              diag::non_sendable_call_result_type,
-              *unsatisfiedIsolation);
-        }
-      }
+      // Sendable checking for arguments and results are deferred to region
+      // isolation.
 
       return false;
     }
@@ -5633,9 +5584,10 @@ InferredActorIsolation ActorIsolationRequest::evaluate(
   ActorIsolation defaultIsolation = ActorIsolation::forUnspecified();
   IsolationSource defaultIsolationSource;
 
-  // If we are supposed to infer main actor isolation by default, make our
-  // default isolation main actor.
-  if (ctx.LangOpts.hasFeature(Feature::UnspecifiedMeansMainActorIsolated)) {
+  // If we are supposed to infer main actor isolation by default for entities
+  // within our module, make our default isolation main actor.
+  if (ctx.LangOpts.hasFeature(Feature::UnspecifiedMeansMainActorIsolated) &&
+      value->getModuleContext() == ctx.MainModule) {
     defaultIsolation = ActorIsolation::forMainActor(ctx);
   }
 
@@ -6478,7 +6430,7 @@ bool swift::checkSendableConformance(
   // superclass conformance to find an unavailable attribute.
   if (auto ext = dyn_cast<ExtensionDecl>(
           conformance->getRootConformance()->getDeclContext())) {
-    if (AvailableAttr::isUnavailable(ext))
+    if (ext->isUnavailable())
       return false;
   }
 
@@ -6632,21 +6584,20 @@ static void addUnavailableAttrs(ExtensionDecl *ext, NominalTypeDecl *nominal) {
            ? enclosing->getDeclContext()->getAsDecl()
            : nullptr) {
     bool anyPlatformSpecificAttrs = false;
-    for (auto available: enclosing->getAttrs().getAttributes<AvailableAttr>()) {
+    for (auto semanticAttr : enclosing->getSemanticAvailableAttrs()) {
+      auto available = semanticAttr.getParsedAttr();
+
       if (available->getPlatform() == PlatformKind::none)
         continue;
 
       auto attr = new (ctx) AvailableAttr(
-          SourceLoc(), SourceRange(),
-          available->getPlatform(),
+          SourceLoc(), SourceRange(), available->getPlatform(),
           available->Message,
-          "", nullptr,
-          available->Introduced.value_or(noVersion), SourceRange(),
-          available->Deprecated.value_or(noVersion), SourceRange(),
-          available->Obsoleted.value_or(noVersion), SourceRange(),
-          PlatformAgnosticAvailabilityKind::Unavailable,
-          /*implicit=*/true,
-          available->isSPI());
+          /*Rename=*/"", available->Introduced.value_or(noVersion),
+          SourceRange(), available->Deprecated.value_or(noVersion),
+          SourceRange(), available->Obsoleted.value_or(noVersion),
+          SourceRange(), PlatformAgnosticAvailabilityKind::Unavailable,
+          /*Implicit=*/true, available->isSPI());
       ext->getAttrs().add(attr);
       anyPlatformSpecificAttrs = true;
     }
@@ -6658,14 +6609,12 @@ static void addUnavailableAttrs(ExtensionDecl *ext, NominalTypeDecl *nominal) {
 
   // Add the blanket "unavailable".
 
-  auto attr = new (ctx) AvailableAttr(SourceLoc(), SourceRange(),
-                                      PlatformKind::none, "", "", nullptr,
-                                      noVersion, SourceRange(),
-                                      noVersion, SourceRange(),
-                                      noVersion, SourceRange(),
-                                      PlatformAgnosticAvailabilityKind::Unavailable,
-                                      false,
-                                      false);
+  auto attr = new (ctx) AvailableAttr(
+      SourceLoc(), SourceRange(), PlatformKind::none, /*Message*/ "",
+      /*Rename=*/"", /*Introduced=*/noVersion, SourceRange(),
+      /*Deprecated=*/noVersion, SourceRange(), /*Obsoleted=*/noVersion,
+      SourceRange(), PlatformAgnosticAvailabilityKind::Unavailable,
+      /*Implicit=*/false, /*SPI=*/false);
   ext->getAttrs().add(attr);
 }
 
@@ -7209,7 +7158,7 @@ bool swift::isPotentiallyIsolatedActor(
 
 /// Determine the actor isolation used when we are referencing the given
 /// declaration.
-static ActorIsolation getActorIsolationForReference(ValueDecl *decl,
+ActorIsolation swift::getActorIsolationForReference(ValueDecl *decl,
                                                     const DeclContext *fromDC) {
   auto declIsolation = getActorIsolation(decl);
 

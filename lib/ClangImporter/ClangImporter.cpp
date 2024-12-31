@@ -63,6 +63,7 @@
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LangStandard.h"
 #include "clang/Basic/Module.h"
+#include "clang/Basic/Specifiers.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CAS/CASOptions.h"
 #include "clang/CAS/IncludeTree.h"
@@ -107,6 +108,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 using namespace swift;
 using namespace importer;
@@ -573,10 +575,13 @@ void importer::getNormalInvocationArguments(
   }
 
   if (LangOpts.EnableCXXInterop) {
-    if (auto path = getCxxShimModuleMapPath(searchPathOpts, triple)) {
+    if (auto path = getCxxShimModuleMapPath(searchPathOpts, LangOpts, triple)) {
       invocationArgStrs.push_back((Twine("-fmodule-map-file=") + *path).str());
     }
   }
+
+  if (LangOpts.hasFeature(Feature::SafeInteropWrappers))
+    invocationArgStrs.push_back("-fexperimental-bounds-safety-attributes");
 
   // Set C language options.
   if (triple.isOSDarwin()) {
@@ -2011,6 +2016,9 @@ ClangImporter::cloneCompilerInstanceForPrecompiling() {
   FrontendOpts.DisableFree = false;
   if (FrontendOpts.CASIncludeTreeID.empty())
     FrontendOpts.Inputs.clear();
+
+  // Share the CASOption and the underlying CAS.
+  invocation->setCASOption(Impl.Invocation->getCASOptsPtr());
 
   auto clonedInstance = std::make_unique<clang::CompilerInstance>(
     Impl.Instance->getPCHContainerOperations(),
@@ -5073,6 +5081,58 @@ TinyPtrVector<ValueDecl *> CXXNamespaceMemberLookup::evaluate(
   return result;
 }
 
+static const llvm::StringMap<std::vector<int>> STLConditionalEscapableParams{
+    {"vector", {0}},
+    {"array", {0}},
+    {"inplace_vector", {0}},
+    {"deque", {0}},
+    {"forward_list", {0}},
+    {"list", {0}},
+    {"set", {0}},
+    {"flat_set", {0}},
+    {"unordered_set", {0}},
+    {"multiset", {0}},
+    {"flat_multiset", {0}},
+    {"unordered_multiset", {0}},
+    {"stack", {0}},
+    {"queue", {0}},
+    {"priority_queue", {0}},
+    {"tuple", {0}},
+    {"variant", {0}},
+    {"optional", {0}},
+    {"pair", {0, 1}},
+    {"expected", {0, 1}},
+    {"map", {0, 1}},
+    {"flat_map", {0, 1}},
+    {"unordered_map", {0, 1}},
+    {"multimap", {0, 1}},
+    {"flat_multimap", {0, 1}},
+    {"unordered_multimap", {0, 1}},
+};
+
+static std::set<StringRef>
+getConditionalEscapableAttrParams(const clang::RecordDecl *decl) {
+  std::set<StringRef> result;
+  if (!decl->hasAttrs())
+    return result;
+  for (auto attr : decl->getAttrs()) {
+    if (auto swiftAttr = dyn_cast<clang::SwiftAttrAttr>(attr))
+      if (swiftAttr->getAttribute().starts_with("escapable_if:")) {
+        StringRef params = swiftAttr->getAttribute().drop_front(
+            StringRef("escapable_if:").size());
+        auto commaPos = params.find(',');
+        StringRef nextParam = params.take_front(commaPos);
+        while (!nextParam.empty() && commaPos != StringRef::npos) {
+          result.insert(nextParam.trim());
+          params = params.drop_front(nextParam.size() + 1);
+          commaPos = params.find(',');
+          nextParam = params.take_front(commaPos);
+        }
+      }
+  }
+  return result;
+}
+
 CxxEscapability
 ClangTypeEscapability::evaluate(Evaluator &evaluator,
                                 EscapabilityLookupDescriptor desc) const {
@@ -5094,37 +5154,59 @@ ClangTypeEscapability::evaluate(Evaluator &evaluator,
       return CxxEscapability::NonEscapable;
     if (hasEscapableAttr(recordDecl))
       return CxxEscapability::Escapable;
-    auto conditionalParams =
-        importer::getConditionalEscapableAttrParams(recordDecl);
-    if (!conditionalParams.empty()) {
+    auto injectedStlAnnotation =
+        recordDecl->isInStdNamespace()
+            ? STLConditionalEscapableParams.find(recordDecl->getName())
+            : STLConditionalEscapableParams.end();
+    bool hasInjectedSTLAnnotation =
+        injectedStlAnnotation != STLConditionalEscapableParams.end();
+    auto conditionalParams = getConditionalEscapableAttrParams(recordDecl);
+    if (!conditionalParams.empty() || hasInjectedSTLAnnotation) {
       auto specDecl = cast<clang::ClassTemplateSpecializationDecl>(recordDecl);
       SmallVector<std::pair<unsigned, StringRef>, 4> argumentsToCheck;
       HeaderLoc loc{recordDecl->getLocation()};
       while (specDecl) {
         auto templateDecl = specDecl->getSpecializedTemplate();
-        for (auto [idx, param] :
-             llvm::enumerate(*templateDecl->getTemplateParameters())) {
-          if (conditionalParams.erase(param->getName()))
-            argumentsToCheck.push_back(std::make_pair(idx, param->getName()));
+        if (hasInjectedSTLAnnotation) {
+          auto params = templateDecl->getTemplateParameters();
+          for (auto idx : injectedStlAnnotation->second)
+            argumentsToCheck.push_back(
+                std::make_pair(idx, params->getParam(idx)->getName()));
+        } else {
+          for (auto [idx, param] :
+               llvm::enumerate(*templateDecl->getTemplateParameters())) {
+            if (conditionalParams.erase(param->getName()))
+              argumentsToCheck.push_back(std::make_pair(idx, param->getName()));
+          }
         }
         auto &argList = specDecl->getTemplateArgs();
         for (auto argToCheck : argumentsToCheck) {
           auto arg = argList[argToCheck.first];
-          if (arg.getKind() != clang::TemplateArgument::Type) {
-            desc.impl.diagnose(loc, diag::type_template_parameter_expected,
-                               argToCheck.second);
-            return CxxEscapability::Unknown;
-          }
+          llvm::SmallVector<clang::TemplateArgument, 1> nonPackArgs;
+          if (arg.getKind() == clang::TemplateArgument::Pack) {
+            auto pack = arg.getPackAsArray();
+            nonPackArgs.assign(pack.begin(), pack.end());
+          } else
+            nonPackArgs.push_back(arg);
+          for (auto nonPackArg : nonPackArgs) {
+            if (nonPackArg.getKind() != clang::TemplateArgument::Type) {
+              desc.impl.diagnose(loc, diag::type_template_parameter_expected,
+                                 argToCheck.second);
+              return CxxEscapability::Unknown;
+            }
 
-          auto argEscapability = evaluateEscapability(
-              arg.getAsType()->getUnqualifiedDesugaredType());
-          if (argEscapability == CxxEscapability::NonEscapable)
-            return CxxEscapability::NonEscapable;
+            auto argEscapability = evaluateEscapability(
+                nonPackArg.getAsType()->getUnqualifiedDesugaredType());
+            if (argEscapability == CxxEscapability::NonEscapable)
+              return CxxEscapability::NonEscapable;
+          }
         }
-        clang::DeclContext *rec = specDecl;
+        if (hasInjectedSTLAnnotation)
+          break;
+        clang::DeclContext *dc = specDecl;
         specDecl = nullptr;
-        while ((rec = rec->getParent())) {
-          specDecl = dyn_cast<clang::ClassTemplateSpecializationDecl>(rec);
+        while ((dc = dc->getParent())) {
+          specDecl = dyn_cast<clang::ClassTemplateSpecializationDecl>(dc);
           if (specDecl)
             break;
         }
@@ -6075,6 +6157,7 @@ TinyPtrVector<ValueDecl *> ClangRecordMemberLookup::evaluate(
     Evaluator &evaluator, ClangRecordMemberLookupDescriptor desc) const {
   NominalTypeDecl *recordDecl = desc.recordDecl;
   DeclName name = desc.name;
+  bool inherited = desc.inherited;
 
   auto &ctx = recordDecl->getASTContext();
   auto allResults = evaluateOrDefault(
@@ -6128,9 +6211,11 @@ TinyPtrVector<ValueDecl *> ClangRecordMemberLookup::evaluate(
           continue;
 
         // Add Clang members that are imported lazily.
-        auto baseResults = evaluateOrDefault(
-            ctx.evaluator,
-            ClangRecordMemberLookup({cast<NominalTypeDecl>(import), name}), {});
+        auto baseResults =
+            evaluateOrDefault(ctx.evaluator,
+                              ClangRecordMemberLookup(
+                                  {cast<NominalTypeDecl>(import), name, true}),
+                              {});
         // Add members that are synthesized eagerly, such as subscripts.
         for (auto member :
              cast<NominalTypeDecl>(import)->getCurrentMembersWithoutLoading()) {
@@ -6149,6 +6234,21 @@ TinyPtrVector<ValueDecl *> ClangRecordMemberLookup::evaluate(
           // as that would cause an ambiguous lookup.
           if (foundNameArities.count(getArity(foundInBase)))
             continue;
+
+          // Do not importBaseMemberDecl() if this is a recursive lookup into
+          // some class's superclass. importBaseMemberDecl() caches synthesized
+          // members, which does not work if we call it on its result, e.g.:
+          //
+          //    importBaseMemberDecl(importBaseMemberDecl(foundInBase,
+          //    recorDecl), recordDecl)
+          //
+          // Instead, we simply pass on the imported decl (foundInBase) as is,
+          // so that only the top-most request calls importBaseMemberDecl().
+          if (inherited) {
+            result.push_back(foundInBase);
+            continue;
+          }
+
           if (auto newDecl = clangModuleLoader->importBaseMemberDecl(
                   foundInBase, recordDecl)) {
             result.push_back(newDecl);
@@ -7600,29 +7700,6 @@ bool importer::hasEscapableAttr(const clang::RecordDecl *decl) {
   return hasSwiftAttribute(decl, "Escapable");
 }
 
-std::set<StringRef>
-importer::getConditionalEscapableAttrParams(const clang::RecordDecl *decl) {
-  std::set<StringRef> result;
-  if (!decl->hasAttrs())
-    return result;
-  for (auto attr : decl->getAttrs()) {
-    if (auto swiftAttr = dyn_cast<clang::SwiftAttrAttr>(attr))
-      if (swiftAttr->getAttribute().starts_with("escapable_if:")) {
-        StringRef params = swiftAttr->getAttribute().drop_front(
-            StringRef("escapable_if:").size());
-        auto commaPos = params.find(',');
-        StringRef nextParam = params.take_front(commaPos);
-        while (!nextParam.empty() && commaPos != StringRef::npos) {
-          result.insert(nextParam.trim());
-          params = params.drop_front(nextParam.size() + 1);
-          commaPos = params.find(',');
-          nextParam = params.take_front(commaPos);
-        }
-      }
-  }
-  return result;
-}
-
 /// Recursively checks that there are no pointers in any fields or base classes.
 /// Does not check C++ records with specific API annotations.
 static bool hasPointerInSubobjects(const clang::CXXRecordDecl *decl) {
@@ -7830,15 +7907,17 @@ CxxRecordSemantics::evaluate(Evaluator &evaluator,
 
   if (!hasDestroyTypeOperations(cxxDecl) ||
       (!hasCopyTypeOperations(cxxDecl) && !hasMoveTypeOperations(cxxDecl))) {
-    if (hasUnsafeAPIAttr(cxxDecl))
-      desc.ctx.Diags.diagnose({}, diag::api_pattern_attr_ignored,
-                              "import_unsafe", decl->getNameAsString());
-    if (hasOwnedValueAttr(cxxDecl))
-      desc.ctx.Diags.diagnose({}, diag::api_pattern_attr_ignored,
-                              "import_owned", decl->getNameAsString());
-    if (hasIteratorAPIAttr(cxxDecl))
-      desc.ctx.Diags.diagnose({}, diag::api_pattern_attr_ignored,
-                              "import_iterator", decl->getNameAsString());
+    if (desc.shouldDiagnoseLifetimeOperations) {
+      if (hasUnsafeAPIAttr(cxxDecl))
+        desc.ctx.Diags.diagnose({}, diag::api_pattern_attr_ignored,
+                                "import_unsafe", decl->getNameAsString());
+      if (hasOwnedValueAttr(cxxDecl))
+        desc.ctx.Diags.diagnose({}, diag::api_pattern_attr_ignored,
+                                "import_owned", decl->getNameAsString());
+      if (hasIteratorAPIAttr(cxxDecl))
+        desc.ctx.Diags.diagnose({}, diag::api_pattern_attr_ignored,
+                                "import_iterator", decl->getNameAsString());
+    }
 
     return CxxRecordSemanticsKind::MissingLifetimeOperation;
   }

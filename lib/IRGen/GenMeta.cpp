@@ -820,7 +820,7 @@ namespace {
       if (!IGM.IRGen.Opts.EnableAnonymousContextMangledNames)
         return;
 
-      IRGenMangler mangler;
+      IRGenMangler mangler(IGM.Context);
       auto mangledName = mangler.mangleAnonymousDescriptorName(Name);
       auto mangledNameConstant =
         IGM.getAddrOfGlobalString(mangledName,
@@ -2675,7 +2675,7 @@ namespace {
             OpaqueParamIndex(opaqueParamIndex) {}
 
       std::string getSymbol() const override {
-        IRGenMangler mangler;
+        IRGenMangler mangler(IGM.Context);
         return mangler.mangleSymbolNameForUnderlyingTypeAccessorString(
             O, OpaqueParamIndex);
       }
@@ -2713,7 +2713,7 @@ namespace {
           : AbstractMetadataAccessor(IGM, O), R(requirement), P(P) {}
 
       std::string getSymbol() const override {
-        IRGenMangler mangler;
+        IRGenMangler mangler(IGM.Context);
         return mangler.mangleSymbolNameForUnderlyingWitnessTableAccessorString(
             O, R, P);
       }
@@ -2758,15 +2758,10 @@ ProtocolDecl *irgen::opaqueTypeRequiresWitnessTable(
 
   // The type itself must be anchored on one of the generic parameters of
   // the opaque type (not an outer context).
-  Type subject = req.getFirstType();
-  while (auto depMember = subject->getAs<DependentMemberType>()) {
-    subject = depMember->getBase();
-  }
-
-  if (auto genericParam = subject->getAs<GenericTypeParamType>()) {
-    unsigned opaqueDepth = opaque->getOpaqueGenericParams().front()->getDepth();
-    if (genericParam->getDepth() == opaqueDepth)
-      return proto;
+  auto *genericParam = req.getFirstType()->getRootGenericParam();
+  unsigned opaqueDepth = opaque->getOpaqueGenericParams().front()->getDepth();
+  if (genericParam->getDepth() == opaqueDepth) {
+    return proto;
   }
 
   return nullptr;
@@ -2929,7 +2924,7 @@ IRGenModule::getAddrOfSharedContextDescriptor(LinkEntity entity,
       // with the same context mangling (a clang module and its overlay,
       // equivalent extensions, etc.). These can share a context descriptor
       // at runtime.
-      auto mangledName = entity.mangleAsString();
+      auto mangledName = entity.mangleAsString(Context);
       if (auto otherDefinition = Module.getGlobalVariable(mangledName)) {
         if (!otherDefinition->isDeclaration() ||
             !entity.isAlwaysSharedLinkage()) {
@@ -6956,6 +6951,7 @@ SpecialProtocol irgen::getSpecialProtocolID(ProtocolDecl *P) {
   case KnownProtocolKind::Identifiable:
   case KnownProtocolKind::Actor:
   case KnownProtocolKind::DistributedActor:
+  case KnownProtocolKind::DistributedActorStub:
   case KnownProtocolKind::DistributedActorSystem:
   case KnownProtocolKind::DistributedTargetInvocationEncoder:
   case KnownProtocolKind::DistributedTargetInvocationDecoder:

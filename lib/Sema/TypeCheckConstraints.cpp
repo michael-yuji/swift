@@ -175,16 +175,6 @@ bool TypeVariableType::Implementation::isSubscriptResultType() const {
              KeyPathExpr::Component::Kind::UnresolvedSubscript;
 }
 
-bool TypeVariableType::Implementation::isApplicationResultType() const {
-  if (!(locator && locator->getAnchor()))
-    return false;
-
-  if (!locator->isLastElement<LocatorPathElt::FunctionResult>())
-    return false;
-
-  return isExpr<ApplyExpr>(locator->getAnchor()) || isSubscriptResultType();
-}
-
 bool TypeVariableType::Implementation::isParameterPack() const {
   return locator
       && locator->isForGenericParameter()
@@ -212,6 +202,14 @@ bool TypeVariableType::Implementation::isOpaqueType() const {
 bool TypeVariableType::Implementation::isCollectionLiteralType() const {
   return locator && (locator->directlyAt<ArrayExpr>() ||
                      locator->directlyAt<DictionaryExpr>());
+}
+
+bool TypeVariableType::Implementation::isNumberLiteralType() const {
+  return locator && locator->directlyAt<NumberLiteralExpr>();
+}
+
+bool TypeVariableType::Implementation::isFunctionResult() const {
+  return locator && locator->isLastElement<LocatorPathElt::FunctionResult>();
 }
 
 void *operator new(size_t bytes, ConstraintSystem& cs,
@@ -460,10 +458,6 @@ TypeChecker::typeCheckTarget(SyntacticElementTarget &target,
     // diagnostics and is a hint for various performance optimizations.
     cs.setContextualInfo(expr, target.getExprContextualTypeInfo());
 
-    // Try to shrink the system by reducing disjunction domains. This
-    // goes through every sub-expression and generate its own sub-system, to
-    // try to reduce the domains of those subexpressions.
-    cs.shrink(expr);
     target.setExpr(expr);
   }
 

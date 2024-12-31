@@ -457,7 +457,7 @@ void TBDGenVisitor::addFunction(StringRef name, SILDeclRef declRef) {
 }
 
 void TBDGenVisitor::addGlobalVar(VarDecl *VD) {
-  Mangle::ASTMangler mangler;
+  Mangle::ASTMangler mangler(VD->getASTContext());
   addSymbol(mangler.mangleEntity(VD), SymbolSource::forGlobal(VD),
             SymbolFlags::Data);
 }
@@ -487,7 +487,7 @@ void TBDGenVisitor::addObjCMethod(AbstractFunctionDecl *AFD) {
 
 void TBDGenVisitor::addProtocolWitnessThunk(RootProtocolConformance *C,
                                             ValueDecl *requirementDecl) {
-  Mangle::ASTMangler Mangler;
+  Mangle::ASTMangler Mangler(requirementDecl->getASTContext());
 
   std::string decorated = Mangler.mangleWitnessThunk(C, requirementDecl);
   // FIXME: We should have a SILDeclRef SymbolSource for this.

@@ -3506,6 +3506,31 @@ public:
 private:
   void emit(ArgumentSource &&arg, AbstractionPattern origParamType,
             std::optional<AnyFunctionType::Param> origParam = std::nullopt) {
+    if (origParam && origParam->isAddressable()) {
+      // If the function takes an addressable parameter, and its argument is
+      // a reference to an addressable declaration with compatible ownership,
+      // forward the address along in-place.
+      if (arg.isExpr()) {
+        auto expr = std::move(arg).asKnownExpr();
+        
+        if (auto le = dyn_cast<LoadExpr>(expr)) {
+          expr = le->getSubExpr();
+        }
+        if (auto dre = dyn_cast<DeclRefExpr>(expr)) {
+          if (auto param = dyn_cast<ParamDecl>(dre->getDecl())) {
+            if (param->isAddressable()
+              && param->getValueOwnership() == origParam->getValueOwnership()) {
+              auto addr = SGF.VarLocs[param].value;
+              claimNextParameters(1);
+              Args.push_back(ManagedValue::forBorrowedAddressRValue(addr));
+              return;
+            }
+          }
+        }
+        arg = ArgumentSource(expr);
+      }
+    }
+            
     if (!arg.hasLValueType()) {
       // If the unsubstituted function type has a parameter of tuple type,
       // explode the tuple value.
@@ -7279,22 +7304,32 @@ ManagedValue SILGenFunction::emitAddressorAccessor(
   emission.apply().getAll(results);
 
   assert(results.size() == 1);
-  auto pointer = results[0].getUnmanagedValue();
+  auto result = results[0].getUnmanagedValue();
 
   // Drill down to the raw pointer using intrinsic knowledge of those types.
   auto pointerType =
-    pointer->getType().castTo<BoundGenericStructType>()->getDecl();
+    result->getType().castTo<BoundGenericStructType>()->getDecl();
   auto props = pointerType->getStoredProperties();
   assert(props.size() == 1);
   VarDecl *rawPointerField = props[0];
-  pointer = B.createStructExtract(loc, pointer, rawPointerField,
-                                  SILType::getRawPointerType(getASTContext()));
+  auto rawPointer =
+    B.createStructExtract(loc, result, rawPointerField,
+                          SILType::getRawPointerType(getASTContext()));
 
   // Convert to the appropriate address type and return.
-  SILValue address = B.createPointerToAddress(loc, pointer, addressType,
+  SILValue address = B.createPointerToAddress(loc, rawPointer, addressType,
                                               /*isStrict*/ true,
                                               /*isInvariant*/ false);
-
+  // Create a dependency on self: the pointer is only valid as long as self is
+  // alive.
+  auto apply = cast<ApplyInst>(result);
+  // global addressors don't have a source value. Presumably, the addressor
+  // is the only way to get at them.
+  if (apply->hasSelfArgument()) {
+    auto selfSILValue = apply->getSelfArgument();
+    address = B.createMarkDependence(loc, address, selfSILValue,
+                                     MarkDependenceKind::Unresolved);
+  }
   return ManagedValue::forLValue(address);
 }
 
