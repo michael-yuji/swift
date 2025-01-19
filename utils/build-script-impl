@@ -457,7 +457,7 @@ function should_execute_host_actions_for_phase() {
 function verify_host_is_supported() {
     local host="$1"
     case ${host} in
-      freebsd-arm64             \
+      freebsd-aarch64             \
       | freebsd-x86_64          \
       | openbsd-x86_64          \
       | openbsd-aarch64         \
@@ -2585,7 +2585,7 @@ for host in "${ALL_HOSTS[@]}"; do
                   cmake_options=(
                     -DENABLE_SWIFT=YES
                     ${cmake_options[@]}
-                    
+
                     -DCMAKE_BUILD_TYPE:STRING="${LIBDISPATCH_BUILD_TYPE}"
                     -DCMAKE_C_COMPILER:PATH="${CLANG_BIN}/clang"
                     -DCMAKE_CXX_COMPILER:PATH="${CLANG_BIN}/clang++"

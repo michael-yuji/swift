@@ -1,3 +1,4 @@
+#if hasFeature(Macros)
 /// Different ways to annotate pointer parameters using the `@_SwiftifyImport` macro.
 /// All indices into parameter lists start at 1. Indices __must__ be integer literals, and strings
 /// __must__ be string literals, because their contents are parsed by the `@_SwiftifyImport` macro.
@@ -46,3 +47,4 @@ public enum _SwiftifyInfo {
 @attached(peer, names: overloaded)
 public macro _SwiftifyImport(_ paramInfo: _SwiftifyInfo...) =
     #externalMacro(module: "SwiftMacros", type: "SwiftifyImportMacro")
+#endif

@@ -527,6 +527,7 @@ function(_add_target_variant_link_flags)
     list(APPEND link_libraries "pthread" "dl")
   elseif("${LFLAGS_SDK}" STREQUAL "FREEBSD")
     list(APPEND link_libraries "pthread")
+    list(APPEND result "-Wl,-Bsymbolic")
   elseif("${LFLAGS_SDK}" STREQUAL "OPENBSD")
     list(APPEND link_libraries "pthread")
     list(APPEND result "-Wl,-Bsymbolic")
@@ -698,7 +699,7 @@ function(_add_swift_lipo_target)
         DEPENDS ${source_targets})
   endif()
 endfunction()
- 
+
 # Add a single variant of a new Swift library.
 #
 # Usage:
