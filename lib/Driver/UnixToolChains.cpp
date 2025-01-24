@@ -164,6 +164,25 @@ bool toolchains::GenericUnix::addRuntimeRPath(const llvm::Triple &T,
                       options::OPT_no_toolchain_stdlib_rpath, apply_rpath);
 }
 
+StringRef getOSLibName(llvm::Triple Triple) {
+  if (Triple.isOSDarwin())
+    return "darwin";
+  switch (Triple.getOS()) {
+  case llvm::Triple::FreeBSD:
+    return "freebsd";
+  case llvm::Triple::NetBSD:
+    return "netbsd";
+  case llvm::Triple::OpenBSD:
+    return "openbsd";
+  case llvm::Triple::Solaris:
+    return "sunos";
+  case llvm::Triple::AIX:
+    return "aix";
+  default:
+    return Triple.getOSName();
+  }
+}
+
 ToolChain::InvocationInfo
 toolchains::GenericUnix::constructInvocation(const DynamicLinkJobAction &job,
                                              const JobContext &context) const {
@@ -366,7 +385,7 @@ toolchains::GenericUnix::constructInvocation(const DynamicLinkJobAction &job,
     llvm::sys::path::remove_filename(LibProfile); // remove platform name
     llvm::sys::path::append(LibProfile, "clang", "lib");
 
-    llvm::sys::path::append(LibProfile, getTriple().getOSName(),
+    llvm::sys::path::append(LibProfile, getOSLibName(getTriple()),
                             Twine("libclang_rt.profile-") +
                                 getTriple().getArchName() + ".a");
     Arguments.push_back(context.Args.MakeArgString(LibProfile));
@@ -396,7 +415,6 @@ toolchains::GenericUnix::constructInvocation(const DynamicLinkJobAction &job,
 
   return II;
 }
-
 
 ToolChain::InvocationInfo
 toolchains::GenericUnix::constructInvocation(const StaticLinkJobAction &job,
