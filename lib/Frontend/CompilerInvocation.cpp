@@ -393,8 +393,28 @@ void CompilerInvocation::computeCXXStdlibOptions() {
     // (see https://reviews.llvm.org/D101479).
     LangOpts.CXXStdlib = CXXStdlibKind::Msvcprt;
     LangOpts.PlatformDefaultCXXStdlib = CXXStdlibKind::Msvcprt;
-  }
-  if (LangOpts.Target.isOSLinux() || LangOpts.Target.isOSDarwin()) {
+  } else if (LangOpts.Target.isOSLinux() || LangOpts.Target.isOSDarwin() ||
+        LangOpts.Target.isOSFreeBSD()) {
+    auto [clangDriver, clangDiagEngine] =
+        ClangImporter::createClangDriver(LangOpts, ClangImporterOpts);
+    auto clangDriverArgs = ClangImporter::createClangArgs(
+        ClangImporterOpts, SearchPathOpts, clangDriver);
+    auto &clangToolchain =
+        clangDriver.getToolChain(clangDriverArgs, LangOpts.Target);
+    auto cxxStdlibKind = clangToolchain.GetCXXStdlibType(clangDriverArgs);
+    auto cxxDefaultStdlibKind = clangToolchain.GetDefaultCXXStdlibType();
+
+    auto toCXXStdlibKind =
+        [](clang::driver::ToolChain::CXXStdlibType clangCXXStdlibType)
+        -> CXXStdlibKind {
+      switch (clangCXXStdlibType) {
+      case clang::driver::ToolChain::CST_Libcxx:
+        return CXXStdlibKind::Libcxx;
+      case clang::driver::ToolChain::CST_Libstdcxx:
+        return CXXStdlibKind::Libstdcxx;
+      }
+    };
+
     LangOpts.CXXStdlib = toCXXStdlibKind(cxxStdlibKind);
     LangOpts.PlatformDefaultCXXStdlib = toCXXStdlibKind(cxxDefaultStdlibKind);
   }
@@ -1036,7 +1056,7 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
     Opts.EnableTargetOSChecking
       = A->getOption().matches(OPT_enable_target_os_checking);
   }
-  
+
   Opts.EnableNewOperatorLookup = Args.hasFlag(OPT_enable_new_operator_lookup,
                                               OPT_disable_new_operator_lookup,
                                               /*default*/ false);
@@ -1443,7 +1463,7 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   if (const Arg *A = Args.getLastArg(OPT_clang_target)) {
     Opts.ClangTarget = llvm::Triple(A->getValue());
   }
-  
+
   Opts.setCxxInteropFromArgs(Args, Diags);
 
   Opts.EnableObjCInterop =
@@ -1493,7 +1513,7 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   auto getDefaultMinimumInliningTargetVersion =
       [&](const llvm::Triple &triple) -> llvm::VersionTuple {
     const auto targetVersion = getVersionTuple(triple);
-    
+
     // In API modules, default to the version when Swift first became available.
     if (Opts.LibraryLevel == LibraryLevel::API) {
       if (auto minVersion = minimumAvailableOSVersionForTriple(triple))
@@ -2940,7 +2960,7 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
 
   Opts.NoAllocations = Args.hasArg(OPT_no_allocations);
 
-  Opts.EnableExperimentalSwiftBasedClosureSpecialization = 
+  Opts.EnableExperimentalSwiftBasedClosureSpecialization =
       Args.hasArg(OPT_enable_experimental_swift_based_closure_specialization);
 
   // If these optimizations are enabled never preserve functions for the
