@@ -964,9 +964,6 @@ if(SWIFT_MINIMAL_CXX_BOOTSTRAP)
   # Disable regular expression support.
   set(SWIFT_BUILD_REGEX_PARSER_IN_COMPILER OFF)
 
-  # Disable string processing library
-  set(SWIFT_ENABLE_EXPERIMENTAL_STRING_PROCESSING OFF)
-
   # Disable bootstrapping
   set(BOOTSTRAPPING_MODE OFF)
 endif()
